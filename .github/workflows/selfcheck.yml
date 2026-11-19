@@ -1,0 +1,75 @@
+name: 仓库自检
+
+# 不编译固件, 只验证仓库自身:
+#   1) 打包/校验脚本能用合成镜像跑通(含反例)
+#   2) 契约 JSON 与各脚本口径一致
+#   3) 适配补丁仍能应用到 config/build.env 里锁定的上游提交
+
+on:
+  push:
+    branches: [main]
+    paths: ['tools/**', 'patches/**', 'uboot/**', 'config/**', '.github/workflows/**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  offline:
+    name: 离线自检
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 合成镜像跑通打包与校验
+        run: python3 tools/selftest.py
+      - name: 契约字段自洽
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          c = json.loads(pathlib.Path('uboot/contract.json').read_text(encoding='utf-8'))
+          limits = c['limits']
+          volumes = {v['name']: v for v in c['ubi']['volumes']}
+          assert limits['kernel_read_bytes'] == 0x600000, limits
+          assert limits['dtb_write_bytes'] == 0x40000, limits
+          assert volumes['ubi_k0']['bytes'] == volumes['ubi_k1']['bytes'] == limits['kernel_volume_bytes']
+          assert volumes['ubi_r0']['bytes'] == volumes['ubi_r1']['bytes'] == limits['rootfs_volume_bytes']
+          assert volumes['ubi_r0']['id'] == 3 and volumes['ubi_r1']['id'] == 6
+          assert volumes['ubi_k0']['id'] == 2 and volumes['ubi_k1']['id'] == 5
+          assert c['boot']['root_volume_id'] == volumes['ubi_r0']['id']
+          assert c['boot']['root_device'] == '/dev/ubiblock0_%d' % volumes['ubi_r0']['id']
+          assert 'root=%s' % c['boot']['root_device'] in c['boot']['bootargs_required']
+          assert c['ubi']['leb_bytes'] * volumes['ubi_r0']['eraseblocks'] == limits['rootfs_volume_bytes']
+          assert 'ubi_dpi' in volumes and 'ubi_fpga' not in volumes
+          assert sorted(v['id'] for v in c['ubi']['volumes']) == list(range(len(c['ubi']['volumes'])))
+          assert sum(v['eraseblocks'] for v in c['ubi']['volumes']) == c['ubi']['reserved_leb_total']
+          assert c['ubi']['peb_count'] == c['partitions'][4]['bytes'] // c['ubi']['peb_bytes']
+          print('契约自洽检查通过')
+          PY
+      - name: 刷机命令与契约一致
+        run: |
+          python3 tools/make_bundle.py --help >/dev/null
+          grep -q 'pfl_kernel1_sz=0x600000' uboot/env-pt1570-r10.txt
+          grep -q '251648K@0x340000(ubi_device)' uboot/env-pt1570-r10.txt
+          echo "环境转储与契约一致"
+
+  patch:
+    name: 补丁可应用
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: 拉取锁定提交并试打补丁
+        run: |
+          set -a; . config/build.env; set +a
+          git init upstream
+          git -C upstream remote add origin "$PONWRT_REPO"
+          git -C upstream fetch --depth 1 origin "$PONWRT_REF"
+          git -C upstream checkout -q FETCH_HEAD
+          for patch in patches/*.patch; do
+            echo "== $patch"
+            git -C upstream apply --check --verbose "$GITHUB_WORKSPACE/$patch"
+            git -C upstream apply "$GITHUB_WORKSPACE/$patch"
+          done
+          sh -n upstream/port/overlay/target/linux/rtl9617c/base-files/lib/upgrade/platform.sh
+          grep -q 'pt1570_oem_upgrade' upstream/port/overlay/target/linux/rtl9617c/base-files/lib/upgrade/platform.sh
+          echo "补丁应用与语法检查通过"

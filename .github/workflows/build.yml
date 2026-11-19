@@ -1,0 +1,224 @@
+name: 云编译 PT1570-R10 固件
+
+# 云端拉取 PonWRT-TYFZA1 源码 -> 打适配补丁 -> 编译 -> 打包 -> 按 U-Boot 契约校验
+# 本地不保存源码和工具链, 产物只有刷机包。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ponwrt_ref:
+        description: PonWRT-TYFZA1 提交号或分支(留空使用 config/build.env 的固定提交)
+        required: false
+        default: ''
+      variant:
+        description: 机型拓扑
+        type: choice
+        options: [four_gbe, 2p5g]
+        default: four_gbe
+      version:
+        description: 固件版本号(写到 manifest 和升级包元数据)
+        required: false
+        default: ''
+      release_tag:
+        description: 可选, 填了就发布 Release(例如 v0.8.5-pt1570)
+        required: false
+        default: ''
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pt1570-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PONWRT_DIR: ponwrt
+  OPENWRT_DIR: ponwrt/sources/openwrt
+
+jobs:
+  firmware:
+    name: 编译与打包
+    runs-on: ubuntu-24.04
+    timeout-minutes: 420
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取编译参数
+        run: |
+          set -a; . config/build.env; set +a
+          if [ -n "${{ inputs.ponwrt_ref }}" ]; then
+            PONWRT_REF="${{ inputs.ponwrt_ref }}"
+          fi
+          if [ -n "${{ inputs.variant }}" ]; then
+            DEFAULT_VARIANT="${{ inputs.variant }}"
+          fi
+          VERSION_INPUT="${{ inputs.version }}"
+          if [ -z "$VERSION_INPUT" ]; then
+            if [ "$GITHUB_REF_TYPE" = tag ]; then
+              VERSION_INPUT="${GITHUB_REF_NAME#v}"
+            else
+              VERSION_INPUT="$(date -u +%Y%m%d)-${GITHUB_SHA:0:7}"
+            fi
+          fi
+          {
+            echo "PONWRT_REPO=$PONWRT_REPO"
+            echo "PONWRT_REF=$PONWRT_REF"
+            echo "RUNTIME_RELEASE=$RUNTIME_RELEASE"
+            echo "RUNTIME_ASSET=$RUNTIME_ASSET"
+            echo "SIGNING_KEY_URL=$SIGNING_KEY_URL"
+            echo "SIGNING_KEY_SHA256=$SIGNING_KEY_SHA256"
+            echo "VARIANT=$DEFAULT_VARIANT"
+            echo "FIRMWARE_VERSION=$VERSION_INPUT"
+          } >> "$GITHUB_ENV"
+          echo "本次编译: 上游 $PONWRT_REF, 机型 $DEFAULT_VARIANT, 版本 $VERSION_INPUT"
+
+      - name: 释放磁盘空间并安装依赖
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo apt-get update
+          sudo apt-get install -y build-essential busybox clang-18 llvm-18 lld-18 flex bison gawk \
+            gettext git libncurses-dev libssl-dev python3 python3-setuptools rsync unzip \
+            zlib1g-dev file wget curl device-tree-compiler u-boot-tools swig \
+            libelf-dev python3-pyelftools python3-dev libfuse-dev pkgconf
+          df -h /
+
+      - name: 拉取上游 PonWRT-TYFZA1
+        run: |
+          git init "$PONWRT_DIR"
+          git -C "$PONWRT_DIR" remote add origin "$PONWRT_REPO"
+          git -C "$PONWRT_DIR" fetch --depth 1 origin "$PONWRT_REF"
+          git -C "$PONWRT_DIR" checkout -q FETCH_HEAD
+          git -C "$PONWRT_DIR" log -1 --format='上游提交 %H %cI %s'
+
+      - name: 打适配补丁
+        run: |
+          for patch in patches/*.patch; do
+            echo "== $patch"
+            git -C "$PONWRT_DIR" apply --verbose "$GITHUB_WORKSPACE/$patch"
+          done
+          upgrade="$PONWRT_DIR/port/overlay/target/linux/rtl9617c/base-files/lib/upgrade"
+          for script in "$upgrade/platform.sh" "$upgrade/tyfza1-storage.sh" \
+                        "$PONWRT_DIR/port/packages/tyfza1-storage/files/tyfza1-migrate-storage"; do
+            test -f "$script"
+            sh -n "$script"
+          done
+          grep -q pt1570_oem_upgrade "$upgrade/platform.sh"
+          # 卷 ID 必须按名解析, 不允许再出现上游的 4/7 假设
+          grep -q 'vol_id' "$PONWRT_DIR/port/packages/tyfza1-storage/files/tyfza1-migrate-storage"
+          ! grep -q 'ubi_r0:${ubidev}_4' "$upgrade/tyfza1-storage.sh"
+
+      - name: 获取锁定的 OpenWrt 源码
+        working-directory: ponwrt
+        run: sh port/scripts/prepare.sh sources/openwrt
+
+      - name: 准备 OMCI 交叉编译器
+        run: |
+          rustup toolchain install 1.96.1 --profile minimal
+          rustup target add --toolchain 1.96.1 aarch64-unknown-linux-musl
+          echo "TYFZA1_CARGO=$(rustup which --toolchain 1.96.1 cargo)" >> "$GITHUB_ENV"
+
+      - name: 缓存 OpenWrt 下载目录
+        uses: actions/cache@v4
+        with:
+          path: ponwrt/sources/openwrt/dl
+          key: openwrt-dl-${{ hashFiles('ponwrt/port/sources.lock.json') }}-${{ hashFiles('ponwrt/configs/feeds.conf') }}
+
+      - name: 获取运行时文件与签名密钥
+        run: |
+          mkdir -p artifacts/runtime-inputs artifacts/signing
+          gh release download "$RUNTIME_RELEASE" --repo "${PONWRT_REPO#https://github.com/}" \
+            --pattern "$RUNTIME_ASSET" --dir artifacts --clobber
+          tar -xzf "artifacts/$RUNTIME_ASSET" -C artifacts/runtime-inputs
+          umask 077
+          if [ -n "${{ secrets.TYFZA1_FIT_SIGNING_KEY }}" ]; then
+            printf '%s\n' "${{ secrets.TYFZA1_FIT_SIGNING_KEY }}" > artifacts/signing/dev.key
+          else
+            curl --fail --location --retry 3 --connect-timeout 15 --max-time 60 \
+              "$SIGNING_KEY_URL" --output artifacts/signing/dev.key
+            echo "$SIGNING_KEY_SHA256  artifacts/signing/dev.key" | sha256sum -c -
+          fi
+          openssl req -new -x509 -key artifacts/signing/dev.key \
+            -out artifacts/signing/dev.crt -subj /CN=PT1570-R10-CI -days 3650
+          ls -l artifacts/runtime-inputs artifacts/signing
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: 组装 .config
+        run: |
+          # 以上游自带的最小启动配置为底, 追加本机型的覆盖片段。
+          cat ponwrt/port/configs/tyfza1-boot.config > artifacts/pt1570-r10.config
+          echo >> artifacts/pt1570-r10.config
+          cat config/pt1570-r10.config >> artifacts/pt1570-r10.config
+          grep -c . artifacts/pt1570-r10.config
+
+      - name: 编译 OpenWrt + 原生 PE 固件
+        shell: bash
+        working-directory: ponwrt
+        env:
+          TYFZA1_RUNTIME_INPUTS: ${{ github.workspace }}/artifacts/runtime-inputs
+          TYFZA1_SIGNING_KEYS: ${{ github.workspace }}/artifacts/signing
+          TYFZA1_CONFIG: ${{ github.workspace }}/artifacts/pt1570-r10.config
+        run: |
+          export PATH="/usr/lib/llvm-18/bin:$PATH"
+          sh port/scripts/build.sh sources/openwrt "$(nproc)" 2>&1 | tee "$GITHUB_WORKSPACE/artifacts/build.log"
+
+      - name: 打包刷机包
+        run: |
+          python3 tools/make_bundle.py \
+            --tree "$OPENWRT_DIR" \
+            --port "$PONWRT_DIR" \
+            --out "artifacts/pt1570-r10-${FIRMWARE_VERSION}" \
+            --contract uboot/contract.json \
+            --version "$FIRMWARE_VERSION" \
+            --variant "$VARIANT" \
+            --ponwrt-ref "$PONWRT_REF"
+
+      - name: 按 U-Boot 契约校验
+        run: |
+          BUNDLE="artifacts/pt1570-r10-${FIRMWARE_VERSION}"
+          python3 tools/verify_bundle.py "$BUNDLE" \
+            --contract uboot/contract.json --strict-raw \
+            | tee artifacts/verify.log
+          {
+            echo "### 契约校验"
+            echo '```'
+            cat artifacts/verify.log
+            echo '```'
+            echo
+            echo "- 内核 Image.lzma: $(stat -c%s "$BUNDLE/Image.lzma") 字节"
+            echo "- 设备树 dtb.img: $(stat -c%s "$BUNDLE/dtb.img") 字节"
+            echo "- 根文件系统 rootfs: $(stat -c%s "$BUNDLE/rootfs") 字节"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pt1570-r10-${{ env.FIRMWARE_VERSION }}
+          path: |
+            artifacts/pt1570-r10-${{ env.FIRMWARE_VERSION }}/
+            artifacts/verify.log
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: 发布 Release
+        if: inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ inputs.release_tag }}"
+          [ -n "$TAG" ] || TAG="$GITHUB_REF_NAME"
+          BUNDLE="artifacts/pt1570-r10-${FIRMWARE_VERSION}"
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "PT1570-R10 $FIRMWARE_VERSION" --draft \
+              --notes "云编译产物, 仅适用于原厂 U-Boot 的 PT1570-R10 (RTL9617C)。刷机步骤见包内 flash-cmds.txt。"
+          fi
+          (cd "$BUNDLE" && zip -q -r "../pt1570-r10-${FIRMWARE_VERSION}.zip" .)
+          gh release upload "$TAG" \
+            "artifacts/pt1570-r10-${FIRMWARE_VERSION}.zip" \
+            "artifacts/verify.log" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease

@@ -1,0 +1,19 @@
+# 编译产物与本地临时目录
+artifacts/
+out/
+.tmp/
+restore/
+*.zip
+*.log
+
+# 固件与转储: 体积大且含本机身份/校准数据, 不要进版本库
+*.bin
+*.ubi
+*.itb
+*.squashfs
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc

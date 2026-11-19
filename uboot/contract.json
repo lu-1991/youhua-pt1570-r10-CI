@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "device": {
+    "model": "PT1570-R10",
+    "vendor": "Youhua (联通定制)",
+    "soc": "Realtek RTL9617C (Taurus), 4x Cortex-A55",
+    "pon": "10G-EPON",
+    "lan": "4x GbE (no 2.5G port)",
+    "reference_target": "rtl9617c / tianyi,tyfza1"
+  },
+  "evidence": {
+    "note": "所有数值均来自本机 U-Boot 环境分区与分区镜像，未使用任何默认值推测。",
+    "uboot_image": {
+      "path": "pt1570-r10.boot.bin",
+      "bytes": 2097152,
+      "sha256": "ad5c059cdf65d3d93a35345da9ed3ab1e3143f54c00efbe34a27ef5f23b25f4c",
+      "format": "Realtek 打包镜像 (0xAA640001 头)，与 NAND 内 mtd0 裸镜像形态不同"
+    },
+    "uboot_running": {
+      "path": "pt1570-r10-backup/mtd0-boot.bin",
+      "version": "U-Boot 2020.01-svn28407 (Jan 02 2024 - 23:03:29 +0800) Taurus-SoC",
+      "sha256": "5ee1e8f8853bd4ba8b06ac6410e421cf3bcaa0b68e994f3de853b7f86d4c01b1"
+    },
+    "env": {
+      "path": "pt1570-r10-backup/mtd1-env.bin",
+      "sha256": "1d7b3aaf0eb41016bde2e6f7a61ca873f81ce8e928022d3479fcfd64c705a56d",
+      "offset": "0x280000",
+      "size": "0x40000"
+    },
+    "stock_ubi": {
+      "path": "pt1570-r10-backup/mtd4-ubi_device.bin",
+      "bytes": 257687552,
+      "sha256": "88c3eaf5f3ead45431f7caaf63ab2f04dd8fbb86f74f29f8a2edbfcecf8154b7"
+    }
+  },
+  "mtdparts": "2048K(boot),256K@0x280000(env),256K@0x2C0000(env2),256K@0x300000(static_conf),251648K@0x340000(ubi_device)",
+  "partitions": [
+    { "index": 0, "label": "boot", "offset": 0, "bytes": 2097152, "write": false },
+    { "index": 1, "label": "env", "offset": 2621440, "bytes": 262144, "write": false },
+    { "index": 2, "label": "env2", "offset": 2883584, "bytes": 262144, "write": false },
+    { "index": 3, "label": "static_conf", "offset": 3145728, "bytes": 262144, "write": false },
+    { "index": 4, "label": "ubi_device", "offset": 3407872, "bytes": 257687552, "write": true }
+  ],
+  "ubi": {
+    "mtd_index": 4,
+    "part_name": "ubi_device",
+    "peb_bytes": 131072,
+    "leb_bytes": 126976,
+    "peb_count": 1966,
+    "volumes": [
+      { "id": 0,  "name": "ubi_Config",     "eraseblocks": 83,  "bytes": 10539008,   "role": "factory",     "touched": false },
+      { "id": 1,  "name": "ubi_DTB0",       "eraseblocks": 3,   "bytes": 380928,     "role": "dtb-slot0",   "touched": true  },
+      { "id": 2,  "name": "ubi_k0",         "eraseblocks": 50,  "bytes": 6348800,    "role": "kernel-slot0","touched": true  },
+      { "id": 3,  "name": "ubi_r0",         "eraseblocks": 265, "bytes": 33648640,   "role": "rootfs-slot0","touched": true  },
+      { "id": 4,  "name": "ubi_DTB1",       "eraseblocks": 3,   "bytes": 380928,     "role": "dtb-slot1",   "touched": false },
+      { "id": 5,  "name": "ubi_k1",         "eraseblocks": 50,  "bytes": 6348800,    "role": "kernel-slot1","touched": false },
+      { "id": 6,  "name": "ubi_r1",         "eraseblocks": 265, "bytes": 33648640,   "role": "rootfs-slot1","touched": false },
+      { "id": 7,  "name": "ubi_framework1", "eraseblocks": 133, "bytes": 16887808,   "role": "vendor",      "touched": false },
+      { "id": 8,  "name": "ubi_framework2", "eraseblocks": 133, "bytes": 16887808,   "role": "vendor",      "touched": false },
+      { "id": 9,  "name": "ubi_apps",       "eraseblocks": 876, "bytes": 111230976,  "role": "vendor",      "touched": false },
+      { "id": 10, "name": "ubi_dpi",        "eraseblocks": 83,  "bytes": 10539008,   "role": "vendor",      "touched": false }
+    ],
+    "volume_table_pebs": [1774, 1775],
+    "reserved_leb_total": 1944,
+    "overlay_volume": {
+      "name": "rootfs_data",
+      "present_in_stock": false,
+      "note": "原厂固件没有 rootfs_data，首次启动由迁移脚本创建；其卷 ID 由运行时动态分配（落在当前最大 ID 之后），因此所有脚本必须按卷名而非固定 ID 定位。"
+    }  },
+  "boot": {
+    "flow": "bootcmd -> boot_by_commit -> set_act0 -> b1 -> process1 -> lzmadec -> booti",
+    "kernel_is_fit": false,
+    "kernel_compression": "lzma-alone",
+    "kernel_load_addr": "0x00080000",
+    "fdt_load_addr": "0x01000000",
+    "tftp_base": "0x05000000",
+    "session": {
+      "sw_commit": 0,
+      "sw_active": 0,
+      "sw_tryactive": 2
+    },
+    "root_volume": "ubi_r0",
+    "root_volume_id": 3,
+    "root_device": "/dev/ubiblock0_3",
+    "fdt_volume": "ubi_DTB0",
+    "kernel_volume": "ubi_k0",
+    "bootargs_required": [
+      "ubi.mtd=ubi_device",
+      "ubi.block=0,ubi_r0",
+      "root=/dev/ubiblock0_3",
+      "rootfstype=squashfs",
+      "ro",
+      "tyfza1.slot=0",
+      "pt1570.oem=1"
+    ],
+    "env_override": {
+      "variable": "setmoreargs",
+      "stock_value": "setenv more_args ubi.mtd=${ubi_mtd} root=${root_mtd} rootfstype=squashfs",
+      "reason": "b1/b2 每次启动都会先执行 process1 再执行 setmoreargs 重建 more_args, 直接改 more_args 会被覆盖, 必须改这个宏本身",
+      "pt1570_value": "setenv more_args ubi.mtd=4 ubi.block=0,ubi_r0 root=/dev/ubiblock0_3 rootfstype=squashfs ro tyfza1.slot=0 pt1570.oem=1"
+    },
+    "stock_more_args": "ubi.mtd=4 root=31:8 rootfstype=squashfs",
+    "stock_basicargs": "earlycon=serial,0xf43291b0 console=ttyS0,115200"
+  },
+  "network": {
+    "uboot_ipaddr": "192.168.1.2",
+    "uboot_serverip": "192.168.1.7",
+    "netmask": "255.255.255.0",
+    "gatewayip": "192.168.1.7",
+    "lan_device": "lan1..lan4",
+    "admin_url": "http://192.168.1.1"
+  },
+  "limits": {
+    "kernel_read_bytes": 6291456,
+    "kernel_volume_bytes": 6348800,
+    "kernel_raw_bytes_max": 33030144,
+    "dtb_write_bytes": 262144,
+    "dtb_volume_bytes": 380928,
+    "rootfs_volume_bytes": 33648640
+  },
+  "artifacts": {
+    "kernel": "Image.lzma",
+    "dtb": "dtb.img",
+    "rootfs": "rootfs",
+    "sysupgrade": "sysupgrade.bin",
+    "overlay_seed": "overlay/rootfs_data.ubifs.gz"
+  },
+  "lzma": { "lc": 3, "lp": 0, "pb": 2, "dictionary_bytes": 8388608 }
+}

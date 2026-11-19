@@ -1,0 +1,53 @@
+# PT1570-R10 U-Boot 环境关键项 (由 tools/parse_env.py 从分区转储生成)
+
+bootcmd=if itest.s ${sw_tryactive} == 2; then run boot_by_commit;else run boot_by_tryactive;fi
+bootdelay=1
+baudrate=115200
+mtdids=nand0=ca_spinand_flash
+mtdparts=mtdparts=ca_spinand_flash:2048K(boot),256K@0x280000(env),256K@0x2C0000(env2),256K@0x300000(static_conf),251648K@0x340000(ubi_device)
+kernel_addr_r=00080000
+fdt_addr_r=0x01000000
+initrd_addr_r=0x02000000
+unzip_src=0x5000000
+tftp_base=0x5000000
+ipaddr=192.168.1.2
+serverip=192.168.1.7
+netmask=255.255.255.0
+gatewayip=192.168.1.7
+ethact=Taurus-SoC
+sw_commit=1
+sw_active=1
+sw_tryactive=2
+sw_version0=V4.0.0
+sw_version1=V01.01.0
+pfl_boot_sz=0x200000
+pfl_env_size=0x40000
+pfl_cfg_size=0xa00000
+pfl_fdt1_sz=0x40000
+pfl_fdt2_sz=0x40000
+pfl_kernel1_sz=0x600000
+pfl_kernel2_sz=0x600000
+pfl_rootfs1_sz=0x4600000
+pfl_rootfs2_sz=0x4600000
+ubi_mtd_num=4
+ubi_device_name=ubi_device
+ubi_device_img_name=G3_ubi_device.ubi
+uboot_img_name=taurus_spi_nand_loader.img
+rootfs_img_name=rootfs
+basicargs=earlycon=serial,0xf43291b0 console=ttyS0,115200
+
+# 其它宏 (刷机时直接调用)
+check_vol=if run chk_volume; then ; else if run ubi_part; then if run chk_volume; then ; else echo ${current_vol} no exist; false; fi; fi; fi
+ubi_part=ubi part ${ubi_device_name}
+upb=tftp ${tftp_base} ${uboot_img_name} && nand erase 0x0 ${pfl_boot_sz} && nand write ${tftp_base} 0x0 ${filesize}
+upd=setenv current_vol ubi_DTB0 && run check_vol && tftpboot ${tftp_base} dtb.img && ubi write ${tftp_base} ubi_DTB0 ${pfl_fdt1_sz}
+upd1=setenv current_vol ubi_DTB1 && run check_vol && tftpboot ${tftp_base} dtb.img && ubi write ${tftp_base} ubi_DTB1 ${pfl_fdt2_sz}
+updev=setenv current_vol ubi_Config && if run check_vol; then run _updev_bk;  else run _updev; fi
+upenv=tftpboot ${tftp_base} uboot-env.bin && nand erase.part env && nand write ${tftp_base} env ${filesize} && nand erase.part env2 && nand write ${tftp_base} env2 ${filesize}
+upframework=setenv current_vol ubi_framework1 && run check_vol && tftpboot ${tftp_base} framework.img && ubi write ${tftp_base} ubi_framework1 ${filesize} && ubi write ${tftp_base} ubi_framework2 ${filesize}
+upk=setenv current_vol ubi_k0 && run check_vol && tftpboot ${tftp_base} Image.lzma && ubi write ${tftp_base} ubi_k0 ${filesize}
+upk1=setenv current_vol ubi_k1 && run check_vol && tftpboot ${tftp_base} Image.lzma && ubi write ${tftp_base} ubi_k1 ${filesize}
+upr=setenv current_vol ubi_r0 && run check_vol && tftpboot ${tftp_base} ${rootfs_img_name} && ubi write ${tftp_base} ubi_r0 ${filesize}
+upr1=setenv current_vol ubi_r1 && run check_vol && tftpboot ${tftp_base} ${rootfs_img_name} && ubi write ${tftp_base} ubi_r1 ${filesize}
+upt=tftp ${tftp_base} img.tar && upimgtar ${fileaddr} ${filesize}
+upv=tftp ${tftp_base} vm.img && upvmimg ${fileaddr}
