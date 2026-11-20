@@ -76,7 +76,9 @@ config/
   pt1570-r10.config        .config 覆盖片段(含 CONFIG_UIMAGE_FIT_BLK / CONFIG_PACKAGE_fitblk)
 patches/
   oem/0001-oem-uboot-image-layout.patch   oem 专用: 裸 LZMA 内核 + 卷 ID 按名解析
-  fit/README.md                           fit 目标不需要补丁, 说明原因
+  oem/0002-spinand-xtx-g02c.patch         两个目标都要: XT26G02C (0b:12) flash 识别
+  fit/0001-spinand-xtx-g02c.patch         同上(fit 目标副本)
+  fit/README.md                           fit 补丁说明(含为什么只有这一处要改源码)
 uboot/
   contract.json            原厂 2020.01 的启动/存储契约(来自本机 env 转储)
   contract-uboot2026.json  U-Boot 2026.07 的 FIT 契约(来自 boot.bin 里的 BL33)

@@ -313,6 +313,8 @@ def main(argv: list[str] | None = None) -> int:
         description="PT1570-R10 OpenWrt %s" % args.version,
         config_name=contract["fit"]["default_config"],
         timestamp=int(datetime.now(timezone.utc).timestamp()),
+        kernel_load_addr=int(contract["fit"]["kernel_load_addr"], 0),
+        kernel_entry_addr=int(contract["fit"]["kernel_entry_addr"], 0),
     )
     if len(fit_blob) > contract["limits"]["fit_bytes"]:
         raise SystemExit("FIT %d 字节, 超过 fit 卷上限 %d —— 缩小 rootfs 或改用压缩内核"

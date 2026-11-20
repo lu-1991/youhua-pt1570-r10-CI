@@ -150,6 +150,30 @@ def main() -> int:
         rebuild(probe, legacy_data, allow_resize=True)
         expect("legacy-data", probe, "非标准 data 属性")
 
+        # 现场根因回归锁: 删掉 kernel 的 load/entry, U-Boot 报
+        # "Can't get image load address!" -> System boot failed。删属性会缩短
+        # FDT, 数据区偏移改变, 因此和 legacy-data 一样放开 resize(解析阶段即被拒)。
+        def no_load(dtb):
+            kernel_node = dtb.find("/images/kernel-1")
+            kernel_node.del_prop("load")
+            kernel_node.del_prop("entry")
+
+        probe = base / "case-noload"
+        shutil.copytree(bundle, probe)
+        rebuild(probe, no_load, allow_resize=True)
+        expect("noload", probe, "kernel load 属性")
+
+        # 第二个现场根因: load 用了 0x80000(512KiB 对齐, 非 2MiB), 新内核
+        # text_offset=0 会在开 MMU 建页表时 fault, 卡在 Starting kernel。
+        def misalign(dtb):
+            dtb.find("/images/kernel-1").set_u32("load", 0x80000)
+            dtb.find("/images/kernel-1").set_u32("entry", 0x80000)
+
+        probe = base / "case-misalign"
+        shutil.copytree(bundle, probe)
+        rebuild(probe, misalign)
+        expect("misalign", probe, "kernel load 2MiB 对齐")
+
         # --- 设备树错(在打包阶段篡改, 长度可变) ---
         for name, mutate, needle in (
             ("volname",

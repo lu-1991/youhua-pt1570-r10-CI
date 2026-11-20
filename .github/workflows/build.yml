@@ -127,14 +127,18 @@ jobs:
 
       - name: 打适配补丁
         run: |
-          # 补丁按目标分目录: oem 改上游源码(裸 LZMA 升级路径 + 卷 ID 按名);
-          # fit 不需要改源码 —— root=/dev/fit0 / rootdisk / fit 卷节点都在打包阶段
-          # 写进 DTB, 内核侧只靠 .config 打开 CONFIG_UIMAGE_FIT_BLK。
+          # 补丁按目标分目录, 两个目标都有一个共同的内核补丁:
+          #   fit: 0001-spinand-xtx-g02c —— 让 6.18 认出 PT1570 的 XT26G02C (0b:12) flash
+          #   oem: 0001-oem-uboot-image-layout(裸 LZMA 升级 + 卷 ID 按名) + 同一个 flash 补丁
+          # 没有这个 flash 补丁, 内核起得来但 MTD/UBI/overlay/无线校准全部缺失。
           shopt -s nullglob
           for patch in patches/"$BOOT_TARGET"/*.patch; do
             echo "== $patch"
             git -C "$PONWRT_DIR" apply --verbose "$GITHUB_WORKSPACE/$patch"
           done
+          # 确认 flash 补丁的两个二级文件都已就位(打补丁后必须存在)
+          test -f "$PONWRT_DIR/port/overlay/target/linux/rtl9617c/patches-6.18/232-spinand-xtx-g02c.patch"
+          grep -q 'XT26G02C' "$PONWRT_DIR/port/overlay/target/linux/rtl9617c/patches-6.18/232-spinand-xtx-g02c.patch"
           if [ "$BOOT_TARGET" = "oem" ]; then
             upgrade="$PONWRT_DIR/port/overlay/target/linux/rtl9617c/base-files/lib/upgrade"
             for script in "$upgrade/platform.sh" "$upgrade/tyfza1-storage.sh" \

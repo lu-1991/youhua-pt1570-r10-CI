@@ -60,6 +60,11 @@ jobs:
           assert c['fit']['align_bytes'] == 4096
           assert c['fit']['images']['rootfs']['type'] == 'filesystem'
           assert c['fit']['images']['rootfs']['loadable'] is True
+          # kernel 的 load/entry 必须有(否则 Can't get image load address!), 且必须 2MiB 对齐
+          # (新内核 text_offset=0; 用 0x80000 会卡在 Starting kernel 无输出)
+          assert int(c['fit']['kernel_load_addr'], 0) % (2*1024*1024) == 0
+          assert int(c['fit']['kernel_entry_addr'], 0) % (2*1024*1024) == 0
+          assert int(c['fit']['kernel_load_addr'], 0) == int(c['fit']['kernel_entry_addr'], 0)
           assert c['limits']['fit_bytes'] >= c['limits']['kernel_bytes'] + c['limits']['rootfs_bytes']
           # 卷 ID 不再被假设: FIT 路径靠 volname 定位
           assert 'volumes' in c['bootloader']['dts']['volume_lookup']
@@ -106,4 +111,13 @@ jobs:
           done
           sh -n upstream/port/overlay/target/linux/rtl9617c/base-files/lib/upgrade/platform.sh
           grep -q 'pt1570_oem_upgrade' upstream/port/overlay/target/linux/rtl9617c/base-files/lib/upgrade/platform.sh
+          # 两个 boot 目标都必须带 XT26G02C (0b:12) flash 补丁, 否则真机无 MTD/UBI/无线
+          for t in fit oem; do
+            p=$(find patches/$t -name '*spinand-xtx-g02c.patch' | head -1)
+            test -n "$p" || { echo "缺少 $t 目标的 XT26G02C flash 补丁"; exit 1; }
+            grep -q 'XT26G02C' "$p"
+            grep -q '0x12' "$p"
+          done
+          # 补丁应用后内核补丁文件必须就位
+          test -f upstream/port/overlay/target/linux/rtl9617c/patches-6.18/232-spinand-xtx-g02c.patch
           echo "补丁应用与语法检查通过"

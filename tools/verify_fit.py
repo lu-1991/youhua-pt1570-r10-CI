@@ -95,6 +95,23 @@ def check_fit(report: Report, blob: bytes, contract: dict) -> dict:
     # 内核: 解压后必须是 arm64 Image
     kernel = images.get("kernel-1")
     if kernel:
+        # 现场根因: kernel 子镜像缺 load/entry, bootm 报 "Can't get image load
+        # address!" 后 System boot failed。必须和契约里的 arm64 链接地址一致。
+        want_load = int(contract["fit"]["kernel_load_addr"], 0)
+        want_entry = int(contract["fit"]["kernel_entry_addr"], 0)
+        # 新内核 text_offset=0, arm64 booting.rst 要求从 2 MiB 对齐的基址加载;
+        # 用 0x80000(512 KiB 对齐)会卡在 "Starting kernel ..." 且无任何输出。
+        report.check("kernel load 2MiB 对齐",
+                     kernel["load"] is not None and kernel["load"] % (2 * 1024 * 1024) == 0,
+                     "%s" % ("0x%08x" % kernel["load"] if kernel["load"] is not None else "缺失"))
+        report.check("kernel load 属性", kernel["load"] == want_load,
+                     "%s / 期望 0x%08x" % (
+                         "0x%08x" % kernel["load"] if kernel["load"] is not None else "缺失",
+                         want_load))
+        report.check("kernel entry 属性", kernel["entry"] == want_entry,
+                     "%s / 期望 0x%08x" % (
+                         "0x%08x" % kernel["entry"] if kernel["entry"] is not None else "缺失",
+                         want_entry))
         kpayload = blob[kernel["position"]:kernel["position"] + kernel["size"]]
         comp = kernel["compression"]
         report.check("kernel compression", comp in ("lzma", "none"), comp)

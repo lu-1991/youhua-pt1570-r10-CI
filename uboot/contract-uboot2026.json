@@ -17,7 +17,10 @@
       "layout": "MBR+GPT(fip0@0x40000, fip1@0x100000) + 两份相同 FIP，各 742400 B",
       "bl33": {
         "format": "RTL9-BL33-LZMA-STUB + LZMA-alone",
-        "stub_strings": ["RTL9-BL33-LZMA-STUB:", "PT1570-R10"],
+        "stub_strings": [
+          "RTL9-BL33-LZMA-STUB:",
+          "PT1570-R10"
+        ],
         "decompressed_bytes": 543864,
         "version_string": "U-Boot 2026.07-gbb07c993b94f (Nov 16 2026 - 03:48:11 +0000) PT1570-R10"
       }
@@ -39,8 +42,15 @@
         "No system is installed now; upload a firmware again."
       ],
       "absent_stock_macros": [
-        "upk", "upd", "upr", "b1", "process1", "setmoreargs",
-        "sw_commit", "sw_tryactive", "pfl_kernel1_sz"
+        "upk",
+        "upd",
+        "upr",
+        "b1",
+        "process1",
+        "setmoreargs",
+        "sw_commit",
+        "sw_tryactive",
+        "pfl_kernel1_sz"
       ]
     },
     "kernel_side": {
@@ -52,6 +62,16 @@
       "kconfig": "CONFIG_UIMAGE_FIT_BLK=y",
       "userspace_package": "fitblk (package/utils/fitblk，提供 /usr/sbin/fitblk 与 /lib/upgrade/fit.sh)",
       "device_name_note": "块设备名是 /dev/fit0（FIT_DEVICE_PREFIX \"fit\"），不是 /dev/fitblk0"
+    },
+    "spi_nand": {
+      "raw_id_observed": "0b12001200",
+      "manufacturer": "XTX (芯天下), JEDEC 0x0b",
+      "device": "XT26G02C, 256 MiB SLC SPI-NAND",
+      "geometry": "2K page / 64B OOB / 128K erase block / 2048 blocks",
+      "kernel_probe_without_patch": "spi-nand: unknown raw ID 0b12001200; probe failed -95 (-ENOTSUPP)",
+      "consequence": "no MTD partitions -> no UBI -> no overlay (root stays tmpfs, config lost on reboot) -> no /tmp/tyfza1-factory -> radio calibration missing -> rtl_ax_ap probe -12 -> no WLAN",
+      "fix_patch": "patches/{fit,oem}/*spinand-xtx-g02c.patch -> adds port/overlay/target/linux/rtl9617c/patches-6.18/232-spinand-xtx-g02c.patch",
+      "verified_on_device": "2026-11-20 via SSH root@192.168.1.1: /proc/mtd empty, /sys/class/ubi empty, iw dev empty"
     }
   },
   "bootloader": {
@@ -69,7 +89,10 @@
       "tyfza1.slot=0"
     ],
     "dts": {
-      "chosen_extra": ["u-boot,version", "rootdisk"],
+      "chosen_extra": [
+        "u-boot,version",
+        "rootdisk"
+      ],
       "volume_node": "/<flash>/volumes/volume-fit { volname = \"fit\"; }",
       "volume_lookup": "drivers/mtd/ubi/vmt.c: device_get_named_child_node(vol->dev.parent->parent, \"volumes\")"
     }
@@ -78,10 +101,26 @@
     "default_config": "config-1",
     "align_bytes": 4096,
     "kernel_compression": "lzma",
+    "kernel_load_addr": "0x00200000",
+    "kernel_entry_addr": "0x00200000",
+    "kernel_load_addr_note": "新编译的 OpenWrt 6.18 内核 text_offset=0, 按 arm64 booting.rst 必须从 2MiB 对齐的基址加载(0x80000 只有 512KiB 对齐, 会在开 MMU 建页表时 fault, 连 earlycon 都不输出, 表现为卡在 Starting kernel)。0x200000 = 2MiB 对齐, 在 512MiB RAM 内且远离 U-Boot/FIT 镜像。注意这与原厂老内核的 kernel_addr_r=00080000 是两套约定, 不可混用。",
     "images": {
-      "kernel": {"node": "kernel-1", "type": "kernel", "arch": "arm64", "os": "linux"},
-      "fdt": {"node": "fdt-1", "type": "flat_dt", "arch": "arm64"},
-      "rootfs": {"node": "rootfs-1", "type": "filesystem", "loadable": true}
+      "kernel": {
+        "node": "kernel-1",
+        "type": "kernel",
+        "arch": "arm64",
+        "os": "linux"
+      },
+      "fdt": {
+        "node": "fdt-1",
+        "type": "flat_dt",
+        "arch": "arm64"
+      },
+      "rootfs": {
+        "node": "rootfs-1",
+        "type": "filesystem",
+        "loadable": true
+      }
     }
   },
   "limits": {
@@ -90,7 +129,12 @@
     "kernel_bytes": 16777216,
     "rootfs_bytes": 50331648
   },
-  "lzma": {"lc": 3, "lp": 0, "pb": 2, "dictionary_bytes": 8388608},
+  "lzma": {
+    "lc": 3,
+    "lp": 0,
+    "pb": 2,
+    "dictionary_bytes": 8388608
+  },
   "network": {
     "host_ipaddr": "192.168.0.2",
     "uboot_ipaddr": "192.168.0.1",

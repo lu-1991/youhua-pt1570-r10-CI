@@ -1,6 +1,6 @@
 # 适配补丁
 
-本仓库只打一个补丁：
+本仓库对 oem 目标打两个补丁：
 
 ```
 0001-oem-uboot-image-layout.patch
@@ -105,3 +105,12 @@ CI 的自检任务（`.github/workflows/selfcheck.yml`）和构建的第 5 步�
 * 写内核前必须补零到 6,291,456 B（DTB 到 262,144 B）；
 * 写卷顺序是先 `ubi_r` 再 `ubi_k`，且不修改环境变量；
 * 所有 OEM 卷一律按**卷名**定位，不许再出现 `+ slot * 3` 这类算 ID 的写法。
+
+
+## 0002-spinand-xtx-g02c.patch（两个目标共用）
+
+给内核补上 **XT26G02C（0b:12）** NAND flash 的识别。本机 flash 的 raw ID 是
+`0b12001200`，主线 6.18 的 `xtx.c` 只认 G02D（`0b:32`），不认 G02C，导致
+`spi-nand` probe 失败 → 没有 MTD/UBI/overlay/无线校准/PON 身份。这个补丁在 fit
+目标里叫 `0001-spinand-xtx-g02c.patch`，内容相同。详见 `patches/fit/README.md`
+第 0 节和 `docs/troubleshooting.md`。

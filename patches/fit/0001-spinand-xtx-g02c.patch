@@ -1,0 +1,58 @@
+diff --git a/port/overlay/target/linux/rtl9617c/patches-6.18/232-spinand-xtx-g02c.patch b/port/overlay/target/linux/rtl9617c/patches-6.18/232-spinand-xtx-g02c.patch
+new file mode 100644
+index 0000000..15824b5
+--- /dev/null
++++ b/port/overlay/target/linux/rtl9617c/patches-6.18/232-spinand-xtx-g02c.patch
+@@ -0,0 +1,52 @@
++Subject: [PATCH] mtd: spinand: support XTX XT26G02C (0b:12) on PT1570-R10
++
++The Youhua PT1570-R10 ships an XTX XT26G02C 256MiB SPI NAND (raw ID
++0b12001200). Mainline xtx.c knows the G02D (0b:32) but not the older G02C
++(0b:12), so spi-nand probe fails with -ENOTSUPP and no MTD partitions, UBI,
++overlay or per-unit radio calibration ever come up.
++
++Add the G02C entry with both OPCODE_ADDR and OPCODE_DUMMY read-ID methods,
++and its C0[7:4] ECC status decoder (xt26g01c_ecc_get_status), matching the
++geometry (2K page / 64B OOB / 128K block / 2048 blocks = 256MiB) and the
++xt26g0xa OOB layout used by XTX C-series reference drivers.
++
++--- a/drivers/mtd/nand/spi/xtx.c
+++++ b/drivers/mtd/nand/spi/xtx.c
++@@ -138,7 +138,37 @@
++ 
++ 	return -EINVAL;
++ }
+++/* XT26G02C: ECC status is C0[7:4]: 0=clean, 1-8=corrected, >8=uncorrectable. */
+++static int xt26g01c_ecc_get_status(struct spinand_device *spinand, u8 status)
+++{
+++	u8 eccsr = (status & GENMASK(7, 4)) >> 4;
+++
+++	if (eccsr <= 8)
+++		return eccsr;
+++	return -EBADMSG;
+++}
+++
++ static const struct spinand_info xtx_spinand_table[] = {
+++	SPINAND_INFO("XT26G02C",
+++		     SPINAND_ID(SPINAND_READID_METHOD_OPCODE_ADDR, 0x12),
+++		     NAND_MEMORG(1, 2048, 64, 64, 2048, 40, 1, 1, 1),
+++		     NAND_ECCREQ(8, 512),
+++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
+++					      &write_cache_variants,
+++					      &update_cache_variants),
+++		     SPINAND_HAS_QE_BIT,
+++		     SPINAND_ECCINFO(&xt26g0xa_ooblayout,
+++				     xt26g01c_ecc_get_status)),
+++	SPINAND_INFO("XT26G02C",
+++		     SPINAND_ID(SPINAND_READID_METHOD_OPCODE_DUMMY, 0x12),
+++		     NAND_MEMORG(1, 2048, 64, 64, 2048, 40, 1, 1, 1),
+++		     NAND_ECCREQ(8, 512),
+++		     SPINAND_INFO_OP_VARIANTS(&read_cache_variants,
+++					      &write_cache_variants,
+++					      &update_cache_variants),
+++		     SPINAND_HAS_QE_BIT,
+++		     SPINAND_ECCINFO(&xt26g0xa_ooblayout,
+++				     xt26g01c_ecc_get_status)),
++ 	SPINAND_INFO("XT26G01A",
++ 		     SPINAND_ID(SPINAND_READID_METHOD_OPCODE_ADDR, 0xE1),
++ 		     NAND_MEMORG(1, 2048, 64, 64, 1024, 20, 1, 1, 1),

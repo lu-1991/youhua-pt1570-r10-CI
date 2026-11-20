@@ -9,7 +9,7 @@
 | 2 | 读取编译参数 | 从 `config/build.env` 读上游提交/运行时版本/默认机型 | 也可用 `workflow_dispatch` 覆盖 |
 | 3 | 释放磁盘 + 装依赖 | 删 dotnet/android/ghc 等，加 8G swap 防 OOM，装 clang-18、rust 依赖 | 完整构建需要 ~40 GB |
 | 4 | 拉上游 PonWRT | `git fetch --depth 1 origin <PIN>` | 不落盘到仓库 |
-| 5 | 打适配补丁 | `git apply patches/$BOOT_TARGET/*.patch` + `sh -n` 语法检查 | oem 有 1 个补丁；fit 目录下没有补丁（见 `patches/fit/README.md`） |
+| 5 | 打适配补丁 | `git apply patches/$BOOT_TARGET/*.patch` + `sh -n` 语法检查 | oem 有 2 个（裸 LZMA/卷 ID + flash）、fit 有 1 个（flash）；见 `patches/fit/README.md` |
 | 6 | 取锁定 OpenWrt | 上游 `port/scripts/prepare.sh`（固定提交 `79bc56cb`） | 上游自己维护的锁 |
 | 7 | 固化缓存 key | PonWRT 提交前 12 位 + 本仓库 config/补丁指纹 + `sources.lock.json` 哈希（步骤 8 起） | 源码或配置一变就换 key，绝不拿旧缓存编新代码 |
 | 8 | 准备 OMCI 编译器 | rust 1.96.1 + `aarch64-unknown-linux-musl` | 上游要求 |

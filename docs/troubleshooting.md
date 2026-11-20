@@ -86,6 +86,10 @@ failsafe 里可以用 `mount_root` 挂根、`dmesg` 看细节；不熟就直接�
 
 ### overlay 是 tmpfs
 
+> **fit 目标先读这一条**：若 `cat /proc/mtd` 是空的、`dmesg | grep spi-nand` 报
+> `unknown raw ID 0b12001200`，那是 flash 驱动缺失（XT26G02C），见
+> [fit 目标那节](#系统起来了但没-wifi--overlay-是-tmpfs--配置改了就丢fit-目标)。下面讲的是 UBI 正常时的 oem 情况。
+
 `df -h /overlay` 显示 `tmpfs`（约内存一半）说明首启没建出 11 号 `rootfs_data`。
 两种修法：
 
@@ -145,6 +149,70 @@ LuCI → 状态 → 内核日志；或 SSH `dmesg | grep -iE 'ubi|squashfs|mtk|r
 升级写卷失败不影响当前系统（先写 rootfs 再写内核，且失败会保留旧内核），重启后仍是旧版本。
 
 ## fit 目标（U-Boot 2026.07 / uImage.FIT）
+
+### `Load Address: unavailable` → `Can't get image load address!` → `System boot failed (1)`
+
+**这正是首次刷机实测到的失败。** 串口完整路径是：
+
+```
+## Loading kernel (any) from FIT Image at 05000000 ...
+Trying 'kernel-1' kernel subimage
+Load Address: unavailable
+Entry Point:  unavailable
+Verifying Hash Integrity ... sha256+ OK
+Can't get image load address!
+System boot failed (1);
+```
+
+FIT 的 `kernel-1` 子镜像缺 `load` / `entry` 两个 u32 属性。U-Boot 的
+`bootm_load_os()` 必须先拿到 `load` 才知道把解压后的内核搬到哪、从哪个入口跳转；
+缺了就直接失败——注意 **hash 校验是通过的**，所以这不是镜像损坏。
+
+地址写死在契约里（`fit.kernel_load_addr` / `kernel_entry_addr`），由 `pack_fit.py`
+传给 `Fit.build()`。`verify_fit.py` 会检查这两项，`selftest_fit.py` 有 `noload` 反例锁住回归。
+
+### 打印 `Starting kernel ...` 后彻底静默（连 earlycon 都没有一行）
+
+内核拿到了控制权，但第一条指令就 fault。本固件实测的两次原因，按顺序排除：
+
+1. **load 地址不是 2 MiB 对齐**。新编译的 OpenWrt 6.18 内核头是
+   `text_offset=0` / `flags=0xa`（4K 页 + 48 位物理地址范围）。按 arm64 `booting.rst`，
+   这类内核**必须从 2 MiB 对齐的基址加载**。`0x80000` 只有 512 KiB 对齐——那是**原厂老
+   内核**（`text_offset=0x80000`）的地址，两套约定不能混用。开 MMU 建页表时就会 fault，
+   因为还没初始化控制台，所以一行日志都没有。修复：契约里改 `0x200000`（2 MiB 对齐）。
+   `verify_fit.py` 的 `kernel load 2MiB 对齐` 项、`selftest_fit.py` 的 `misalign` 反例锁住。
+2. 真机串口是 `realtek,rtl9617c-uart`，`stdout-path=serial0:115200n8`（alias 指向
+   `/soc/serial@f43291b0`）。如果 DTB 里丢了 stdout-path 或 alias，内核起来了也看不到输出。
+
+修复后串口应打印 `Uncompressing Kernel Image to 200000`，随后是 `Booting Linux on physical
+CPU 0x0` 起的内核日志。
+
+### 系统起来了，但没 WiFi / overlay 是 tmpfs / 配置改了就丢（fit 目标）
+
+这是**内核不认识 NAND flash** 的连锁反应，不是启动失败。SSH 登录后先验证：
+
+```sh
+cat /proc/mtd                 # 空的 → flash 驱动没 probe 成功
+dmesg | grep -i "spi-nand"    # unknown raw ID 0b12001200 → 就是这个问题
+ls /sys/class/ubi/            # 只有 version，没有 ubi0_* → UBI 挂不上
+df -h /                       # tmpfs 而不是 overlay → 配置重启即丢
+iw dev                        # 空 → 无线校准文件在 /tmp/tyfza1-factory，没生成
+dmesg | grep rtl_ax_ap        # probe failed -12
+```
+
+**根因**：本机 flash 是 XTX（芯天下）**XT26G02C**，raw ID `0b12001200`（0b=厂商,
+12=型号, 256 MiB）。主线 6.18 的 `xtx.c` 只认得 G02D（`0b:32`），不认 G02C，
+`spi-nand` probe 报 `-95 (ENOTSUPP)`。flash 没起来 → 没有 MTD 分区 → UBI/overlay/
+无线校准/PON 身份全部缺失（它们都从 `ubi_Config` 读）。
+
+**修复**：本仓库 fit/oem 两个目标的 `patches/*/*spinand-xtx-g02c.patch` 已给内核补上
+这个 ID（内容写入内核补丁目录 `patches-6.18/232-spinand-xtx-g02c.patch`）。用**当前源码
+重新云编译**即可，重新刷入后上述几项应全部恢复。旧固件（缺这个补丁）无法靠刷机命令补救，
+必须重编。
+
+> 注意：这台机器的无线驱动（`rtl_ax_ap`）上游标注 "AP transmission, association
+> and the remaining RF controls are in progress"——flash 修好后硬件/校准会正常识别，
+> 但**能否发射出可连接的 AP 信号取决于上游这半成品驱动**，属上游能力边界，不是本仓库适配层。
 
 ### 串口报 `Wrong Image Format` / `Could not find subimage` / 内核完全不启动
 

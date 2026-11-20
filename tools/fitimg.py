@@ -266,7 +266,9 @@ class Fit:
     @staticmethod
     def build(*, kernel: bytes, fdt: bytes, rootfs: bytes | None,
               kernel_compression: str = "lzma", description: str = "PT1570-R10",
-              config_name: str = "config-1", timestamp: int | None = None) -> bytes:
+              config_name: str = "config-1", timestamp: int | None = None,
+              kernel_load_addr: int | None = None,
+              kernel_entry_addr: int | None = None) -> bytes:
         import hashlib
 
         def pad(data: bytes) -> bytes:
@@ -307,6 +309,14 @@ class Fit:
                 if kind == "kernel":
                     node.set_str("arch", "arm64")
                     node.set_str("os", "linux")
+                    # U-Boot 的 bootm_load_os() 必须先拿到 load 地址才知道把
+                    # (解压后的)内核搬到哪里、从哪个入口跳转。缺这两个属性就是
+                    # 现场那句 "Can't get image load address! / System boot failed"。
+                    # 地址由契约给定, 必须是 2 MiB 对齐(新内核 text_offset=0 的硬性要求)。
+                    if kernel_load_addr is not None:
+                        node.set_u32("load", kernel_load_addr)
+                    if kernel_entry_addr is not None:
+                        node.set_u32("entry", kernel_entry_addr)
                 elif kind == "flat_dt":
                     node.set_str("arch", "arm64")
                 h = node.add_child("hash-1")
@@ -372,6 +382,8 @@ class Fit:
                 "compression": node.get_str("compression", "none"),
                 "position": pos,
                 "size": size,
+                "load": node.get_u32("load"),
+                "entry": node.get_u32("entry"),
                 "node": node,
             }
 
