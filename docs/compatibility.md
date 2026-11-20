@@ -13,6 +13,12 @@
 | `pt1570-r10-backup/mtd6/7/8/9/10/11/12/13-*.bin` | 各 UBI 卷的裸转储，用来核对每个卷的确切字节数 |
 | `pt1570-r10.boot.bin` | 2 MiB，Realtek 打包格式（`0xAA640001` 头），与 mtd0 不是同一形态；刷机不使用 |
 
+> ⚠️ 工作区里现在这份 `pt1570-r10.boot.bin` **不是**上面那份原厂镜像了：
+> 它的 sha256 是 `02fc5dfd…`（契约记录的是 `ad5c059c…`），里面封的是
+> **U-Boot 2026.07-gbb07c993b94f (Nov 16 2026)**，即 `boot_target=fit` 要用的那套
+> bootloader。两者的区别与用法见 [uboot2026.md](uboot2026.md)。
+> 本文档第 2 节之后的内容仍然只适用于原厂 2020.01。
+
 `tools/parse_env.py` 会把这些数值和 `uboot/contract.json` 对拍，任何一项不一致就报错：
 
 ```bash

@@ -2,18 +2,25 @@
 
 给 **友华 PT1570-R10（联通定制 10G-EPON 光猫，Realtek RTL9617C 四核 Cortex-A55）** 用的
 OpenWrt 云编译仓库。源码在 GitHub Actions 上**在线拉取**，本地不需要下载 OpenWrt、
-不需要 Linux、不需要工具链；编译产物是能直接用**机器现有原厂 U-Boot** 刷进去的固件。
+不需要 Linux、不需要工具链。
+
+编译产物按目标 bootloader 分两条路径，CI 里用 `boot_target` 选：
+
+| `boot_target` | 产物 | 目标 bootloader | 刷机文档 |
+| --- | --- | --- | --- |
+| `fit`（默认） | `sysupgrade.itb`（uImage.FIT） | 机器上现装的 **U-Boot 2026.07**（`rtk_boot`，从 UBI 的 `fit` 卷 bootm，根设备 `/dev/fit0`） | [docs/uboot2026.md](docs/uboot2026.md) |
+| `oem` | `Image.lzma` + `dtb.img` + `rootfs` | **原厂 U-Boot 2020.01**（`lzmadec` + `booti`，根设备 `/dev/ubiblock0_3`） | [flash/README.md](flash/README.md) |
 
 上游固件工程是 [PonWRT-TYFZA1](https://github.com/LeoooChen/PonWRT-TYFZA1)（天邑 TYFZA1、
-同一颗 RTL9617C）。本仓库不复制上游代码，只在编译时克隆它、打一个适配补丁、按本机
-U-Boot 的启动契约重新打包。
+同一颗 RTL9617C）。本仓库不复制上游代码，只在编译时克隆它、按目标打补丁或不打补丁、
+按对应 bootloader 的启动契约重新打包。
 
 ```
 本仓库(轻量, 几百 KB)                云端                         你的光猫
-┌──────────────────┐   clone   ┌────────────────────┐   TFTP   ┌────────────┐
-│ workflow + 补丁   │ ────────► │ OpenWrt + PonWRT   │ ───────► │ 原厂 U-Boot │
-│ 契约 + 打包/校验  │           │ clang-18 / rust     │  刷 3 个卷 │ lzmadec+booti│
-└──────────────────┘           └────────────────────┘           └────────────┘
+┌──────────────────┐   clone   ┌────────────────────┐   FIT    ┌────────────────┐
+│ workflow + 补丁   │ ────────► │ OpenWrt + PonWRT   │ ───────► │ U-Boot 2026.07  │
+│ 契约 + 打包/校验  │           │ clang-18 / rust     │  fit 卷  │ rtk_boot+bootm  │
+└──────────────────┘           └────────────────────┘          └────────────────┘
 ```
 
 ## 为什么这套东西能刷进你这台机器
@@ -46,19 +53,16 @@ LZMA 压缩的裸 arm64 `Image`、解压到 `0x80000`，再用 `booti` 启动；
 `pfl_fdt1_sz=0x40000`），长度对不上就读到垃圾。`tools/verify_bundle.py` 会把这一条
 当作硬性检查，编译完自动跑，不通过就红。
 
-## 三步刷机
+## 三步刷机（fit 目标默认）
 
 ```bash
-# 1) 下载 Actions 产物后, 进入包目录并起 TFTP(电脑网卡设 192.168.1.7/24, 接 LAN 口)
-python tools/tftp_serve.py pt1570-r10-<版本>
-
-# 2) 串口进 U-Boot, 按包里的 flash-cmds.txt 逐段粘贴
-#    run ubi_part -> run upk -> run upd -> run upr -> setenv more_args ... -> run b1
-
-# 3) 首启自动迁移原厂数据(1-3 分钟), 之后浏览器开 http://192.168.1.1
+# 1) 下载 Actions 产物后, 电脑网卡设 192.168.0.2/24, 接 LAN1
+# 2) 上电, bootmenu 里选 Start Web Recovery, 浏览器打开 http://192.168.0.1
+# 3) 上传包里的 sysupgrade.itb, 写完从 bootmenu 选 Start OpenWrt
 ```
 
-完整步骤、期望回显、失败恢复见 **[flash/README.md](flash/README.md)**。
+串口方式（TFTP + `ubi write ... fit`）见 **[docs/uboot2026.md](docs/uboot2026.md)**。
+oem 目标（原厂 U-Boot 2020.01，`run upk/upd/upr` 三件套）见 **[flash/README.md](flash/README.md)**。
 恢复原厂见 **[flash/restore-stock.md](flash/restore-stock.md)**。
 
 ## 仓库结构
@@ -66,26 +70,33 @@ python tools/tftp_serve.py pt1570-r10-<版本>
 ```
 .github/workflows/
   build.yml                云编译: 拉上游 -> 打补丁 -> 编译 -> 打包 -> 契约校验 -> Release
-  selfcheck.yml            仓库自检: 合成镜像跑通打包/校验, 补丁是否还能应用
+  selfcheck.yml            仓库自检: 两个目标的打包/校验都能离线跑通
 config/
   build.env                上游提交、运行时文件、默认机型(改这里换版本)
-  pt1570-r10.config        .config 覆盖片段(追加到上游最小配置之后)
+  pt1570-r10.config        .config 覆盖片段(含 CONFIG_UIMAGE_FIT_BLK / CONFIG_PACKAGE_fitblk)
 patches/
-  0001-oem-uboot-image-layout.patch   唯一补丁: 裸 LZMA 内核 + 卷 ID 按名解析(3 个文件)
+  oem/0001-oem-uboot-image-layout.patch   oem 专用: 裸 LZMA 内核 + 卷 ID 按名解析
+  fit/README.md                           fit 目标不需要补丁, 说明原因
 uboot/
-  contract.json            机器可读的启动/存储契约(全部来自本机 env 转储)
+  contract.json            原厂 2020.01 的启动/存储契约(来自本机 env 转储)
+  contract-uboot2026.json  U-Boot 2026.07 的 FIT 契约(来自 boot.bin 里的 BL33)
   env-pt1570-r10.txt       本机 U-Boot 关键环境变量(人工核对用)
 tools/
+  fitimg.py                FDT/FIT 读写(纯标准库, 不依赖 dtc/mkimage)
+  pack_fit.py              打 uImage.FIT: 注入 DTB 三件套 + 4 KiB 对齐 + manifest
+  verify_fit.py            按 FIT 契约校验(fit 目标)
+  make_bundle.py           打包入口: --target fit 转发 pack_fit, --target oem 走老路径
+  verify_bundle.py         按原厂契约校验(oem 目标)
   parse_env.py             用你的 env 转储重新核对契约
-  verify_bundle.py         按契约校验刷机包(CI 与本地同一份逻辑)
-  make_bundle.py           CI 内打包(本地跑需要已编译的 OpenWrt 树)
   tftp_serve.py            最小 TFTP 服务端(U-Boot 用)
-  selftest.py              离线自检(合成镜像 + 反例)
-  rebuild_patch.py         在干净上游树上重建 patches/0001(改补丁后用)
+  selftest.py              oem 离线自检(合成镜像 + 反例)
+  selftest_fit.py          fit 离线自检(合成 FIT + 6 个反例)
+  rebuild_patch.py         在干净上游树上重建 patches/oem/0001
 flash/
-  README.md                刷机手册
+  README.md                oem 刷机手册(原厂 U-Boot)
   restore-stock.md         恢复原厂
 docs/
+  uboot2026.md             fit 目标: 为什么这么做、怎么刷、验证了什么
   compatibility.md         逐字节对拍证据与适配推理
   pipeline.md              云编译流水线说明
   troubleshooting.md       常见故障
@@ -93,7 +104,19 @@ docs/
 
 ## 产物说明
 
-包里每个文件都有用，不要只拿 `sysupgrade.bin`：
+### fit 目标（默认）
+
+| 文件 | 用途 |
+| --- | --- |
+| `sysupgrade.itb` | 整机固件（uImage.FIT）。刷这一个文件就够，对应 UBI 的 `fit` 卷 |
+| `flash-cmds.txt` | Web Recovery 步骤 + 串口 TFTP 命令 |
+| `manifest.json` | 体积/哈希，以及 DTB 里注入了什么（`dtb_fixup`） |
+| `SHA256SUMS` | 校验和 |
+
+FIT 内部：`kernel-1`（LZMA）+ `fdt-1` + `rootfs-1`（SquashFS，4 KiB 对齐），
+`config-1` 的 `loadables` 引用 rootfs —— 内核 `fitblk` 靠这条链注册 `/dev/fit0`。
+
+### oem 目标
 
 | 文件 | 用途 | 对应 U-Boot 宏 |
 | --- | --- | --- |
@@ -109,15 +132,30 @@ docs/
 
 编译完成后 CI 会硬性校验（任一失败则不出包）：
 
+**公共**：校验和与文件一致；`manifest.json` 与实际产物体积/哈希一致。
+
+**fit 目标**（`tools/verify_fit.py`）：
+
+* FIT 魔数、体积上限、默认配置存在、kernel/fdt/rootfs 三个子镜像齐全
+* rootfs 在 `loadables` 里、`type=filesystem`、`data-position` 与 `data-size` 都是 4 KiB 整倍数
+* 每个子镜像的 `hash-1`（sha256）与实际数据一致
+* kernel 的 LZMA 头（`0x5d` / 8 MiB 字典）、声明长度与实际解压长度一致、解开是 arm64 `Image`
+* DTB：`/chosen` 有 `u-boot,version`、`bootargs` 含 `root=/dev/fit0 rootwait rootfstype=squashfs`、
+  `rootdisk` phandle 能解析到 `volname="fit"` 且该节点挂在 flash 节点的 `volumes` 下
+* `tools/selftest_fit.py` 另有 6 个反例（loadables/对齐/volname/bootargs/u-boot,version/数据被改）
+
+**oem 目标**（`tools/verify_bundle.py`）：
+
 * LZMA 头参数、字典、结束标记；解压后是 arm64 `Image`，体积不覆盖 `0x2000000` 保留区
 * `dtb.img` 长度正好 0x40000、FDT 魔数、补零干净、`tianyi,tyfza1` + `realtek,rtl9617c`、含 `ubi_device` 分区
 * `rootfs` 是 SquashFS 4.0 且 ≤ 原厂卷容量
 * `sysupgrade.bin` 的 `kernel` 与 `Image.lzma` 逐字节一致、带 `tyfza1_storage: factory-v1` 元数据
-* 校验和与文件一致
 
-**没有校验**：真实硬件上的启动。我没有这台机器的串口，无法替你验证 PON 注册、LAN 口
-顺序、Wi-Fi 校准。这些都是上游工程在 TYFZA1 上验证过的路径，你的机器与它同源但不保证
-逐台一致 —— 第一次刷机请务必按 [flash/README.md](flash/README.md) 做好备份并接串口。
+**没有校验**：真实硬件上的启动。没有这台机器的串口，无法替你验证 PON 注册、LAN 口
+顺序、Wi-Fi 校准，也**没有**验证 2026.07 是否接受未签名 FIT、`fit` 卷实际可用容量。
+这些都是上游工程在 TYFZA1 上验证过的路径，你的机器与它同源但不保证逐台一致 ——
+第一次刷机请务必按 [docs/uboot2026.md](docs/uboot2026.md) / [flash/README.md](flash/README.md)
+做好备份并接串口。
 
 ## 风险提示（请先读）
 
@@ -130,6 +168,11 @@ docs/
 3. 首启迁移期间**不要断电**。迁移失败会停在 failsafe（可用 LAN + `http://192.168.1.1`
    或串口修复），不会变砖，但需要手动处理。
 4. 原厂一键恢复依赖 `pt1570-r10-backup/mtd4-ubi_device.bin`，请先把它另存一份到别处。
+5. **fit 目标目前只做到"能启动"**：系统内 `sysupgrade` 仍走上游 `nand_do_upgrade`
+   （写 `ubi_k<slot>`），在 2026.07 的 UBI 布局下不适用，升级请用 U-Boot Web Recovery
+   重刷 `sysupgrade.itb`。
+6. **fit / oem 的固件不能混刷**：2026.07 只认 FIT，2020.01 只认裸 LZMA。换目标等于换
+   bootloader + UBI 布局，按 [docs/uboot2026.md](docs/uboot2026.md) 第 6 节回退。
 
 ## 常用操作
 

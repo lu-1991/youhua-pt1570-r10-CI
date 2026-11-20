@@ -2,6 +2,8 @@ name: 云编译 PT1570-R10 固件
 
 # 云端拉取 PonWRT-TYFZA1 源码 -> 打适配补丁 -> 编译 -> 打包 -> 按 U-Boot 契约校验
 # 本地不保存源码和工具链, 产物只有刷机包。
+# 默认 boot_target=fit: 产出 uImage.FIT, 给机器上现装的 U-Boot 2026.07 (rtk_boot + fit 卷);
+# 需要回到原厂 U-Boot 2020.01 时选 oem。
 
 on:
   workflow_dispatch:
@@ -15,6 +17,11 @@ on:
         type: choice
         options: [four_gbe, 2p5g]
         default: four_gbe
+      boot_target:
+        description: 目标 bootloader（fit=U-Boot 2026.07 / oem=原厂 2020.01）
+        type: choice
+        options: [fit, oem]
+        default: fit
       version:
         description: 固件版本号(写到 manifest 和升级包元数据)
         required: false
@@ -71,8 +78,9 @@ jobs:
             echo "SIGNING_KEY_SHA256=$SIGNING_KEY_SHA256"
             echo "VARIANT=$DEFAULT_VARIANT"
             echo "FIRMWARE_VERSION=$VERSION_INPUT"
+            echo "BOOT_TARGET=${{ inputs.boot_target || 'fit' }}"
           } >> "$GITHUB_ENV"
-          echo "本次编译: 上游 $PONWRT_REF, 机型 $DEFAULT_VARIANT, 版本 $VERSION_INPUT"
+          echo "本次编译: 上游 $PONWRT_REF, 机型 $DEFAULT_VARIANT, 版本 $VERSION_INPUT, 目标 ${{ inputs.boot_target || 'fit' }}"
 
       - name: 释放磁盘空间并安装依赖
         run: |
@@ -94,20 +102,26 @@ jobs:
 
       - name: 打适配补丁
         run: |
-          for patch in patches/*.patch; do
+          # 补丁按目标分目录: oem 改上游源码(裸 LZMA 升级路径 + 卷 ID 按名);
+          # fit 不需要改源码 —— root=/dev/fit0 / rootdisk / fit 卷节点都在打包阶段
+          # 写进 DTB, 内核侧只靠 .config 打开 CONFIG_UIMAGE_FIT_BLK。
+          shopt -s nullglob
+          for patch in patches/"$BOOT_TARGET"/*.patch; do
             echo "== $patch"
             git -C "$PONWRT_DIR" apply --verbose "$GITHUB_WORKSPACE/$patch"
           done
-          upgrade="$PONWRT_DIR/port/overlay/target/linux/rtl9617c/base-files/lib/upgrade"
-          for script in "$upgrade/platform.sh" "$upgrade/tyfza1-storage.sh" \
-                        "$PONWRT_DIR/port/packages/tyfza1-storage/files/tyfza1-migrate-storage"; do
-            test -f "$script"
-            sh -n "$script"
-          done
-          grep -q pt1570_oem_upgrade "$upgrade/platform.sh"
-          # 卷 ID 必须按名解析, 不允许再出现上游的 4/7 假设
-          grep -q 'vol_id' "$PONWRT_DIR/port/packages/tyfza1-storage/files/tyfza1-migrate-storage"
-          ! grep -q 'ubi_r0:${ubidev}_4' "$upgrade/tyfza1-storage.sh"
+          if [ "$BOOT_TARGET" = "oem" ]; then
+            upgrade="$PONWRT_DIR/port/overlay/target/linux/rtl9617c/base-files/lib/upgrade"
+            for script in "$upgrade/platform.sh" "$upgrade/tyfza1-storage.sh" \
+                          "$PONWRT_DIR/port/packages/tyfza1-storage/files/tyfza1-migrate-storage"; do
+              test -f "$script"
+              sh -n "$script"
+            done
+            grep -q pt1570_oem_upgrade "$upgrade/platform.sh"
+            # 卷 ID 必须按名解析, 不允许再出现上游的 4/7 假设
+            grep -q 'vol_id' "$PONWRT_DIR/port/packages/tyfza1-storage/files/tyfza1-migrate-storage"
+            ! grep -q 'ubi_r0:${ubidev}_4' "$upgrade/tyfza1-storage.sh"
+          fi
 
       - name: 获取锁定的 OpenWrt 源码
         working-directory: ponwrt
@@ -166,11 +180,17 @@ jobs:
 
       - name: 打包刷机包
         run: |
+          if [ "$BOOT_TARGET" = "fit" ]; then
+            CONTRACT=uboot/contract-uboot2026.json
+          else
+            CONTRACT=uboot/contract.json
+          fi
           python3 tools/make_bundle.py \
+            --target "$BOOT_TARGET" \
             --tree "$OPENWRT_DIR" \
             --port "$PONWRT_DIR" \
             --out "artifacts/pt1570-r10-${FIRMWARE_VERSION}" \
-            --contract uboot/contract.json \
+            --contract "$CONTRACT" \
             --version "$FIRMWARE_VERSION" \
             --variant "$VARIANT" \
             --ponwrt-ref "$PONWRT_REF"
@@ -178,19 +198,33 @@ jobs:
       - name: 按 U-Boot 契约校验
         run: |
           BUNDLE="artifacts/pt1570-r10-${FIRMWARE_VERSION}"
-          python3 tools/verify_bundle.py "$BUNDLE" \
-            --contract uboot/contract.json --strict-raw \
-            | tee artifacts/verify.log
-          {
-            echo "### 契约校验"
-            echo '```'
-            cat artifacts/verify.log
-            echo '```'
-            echo
-            echo "- 内核 Image.lzma: $(stat -c%s "$BUNDLE/Image.lzma") 字节"
-            echo "- 设备树 dtb.img: $(stat -c%s "$BUNDLE/dtb.img") 字节"
-            echo "- 根文件系统 rootfs: $(stat -c%s "$BUNDLE/rootfs") 字节"
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$BOOT_TARGET" = "fit" ]; then
+            python3 tools/verify_fit.py "$BUNDLE" \
+              --contract uboot/contract-uboot2026.json \
+              | tee artifacts/verify.log
+            {
+              echo "### 契约校验（U-Boot 2026.07 / uImage.FIT）"
+              echo '```'
+              cat artifacts/verify.log
+              echo '```'
+              echo
+              echo "- FIT: $(stat -c%s "$BUNDLE/sysupgrade.itb") 字节"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            python3 tools/verify_bundle.py "$BUNDLE" \
+              --contract uboot/contract.json --strict-raw \
+              | tee artifacts/verify.log
+            {
+              echo "### 契约校验（原厂 U-Boot 2020.01）"
+              echo '```'
+              cat artifacts/verify.log
+              echo '```'
+              echo
+              echo "- 内核 Image.lzma: $(stat -c%s "$BUNDLE/Image.lzma") 字节"
+              echo "- 设备树 dtb.img: $(stat -c%s "$BUNDLE/dtb.img") 字节"
+              echo "- 根文件系统 rootfs: $(stat -c%s "$BUNDLE/rootfs") 字节"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
@@ -214,7 +248,7 @@ jobs:
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --title "PT1570-R10 $FIRMWARE_VERSION" --draft \
-              --notes "云编译产物, 仅适用于原厂 U-Boot 的 PT1570-R10 (RTL9617C)。刷机步骤见包内 flash-cmds.txt。"
+              --notes "云编译产物。boot_target=fit 时是 U-Boot 2026.07 的 uImage.FIT 包；boot_target=oem 时是原厂 2020.01 的 Image.lzma/dtb.img/rootfs 三件套。刷机步骤见包内 flash-cmds.txt。"
           fi
           (cd "$BUNDLE" && zip -q -r "../pt1570-r10-${FIRMWARE_VERSION}.zip" .)
           gh release upload "$TAG" \

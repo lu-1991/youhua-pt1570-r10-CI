@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""把云端编译产物整理成 PT1570-R10 原厂 U-Boot 可直接刷写的刷机包。
+"""把云端编译产物整理成 PT1570-R10 刷机包。
 
-    python tools/make_bundle.py --tree sources/openwrt --port ponwrt \
+两个目标(默认 fit, 即 U-Boot 2026.07):
+    --target fit   -> sysupgrade.itb (uImage.FIT, 走 ubi 的 fit 卷, root=/dev/fit0)
+                      实现见 tools/pack_fit.py, 本文件的 main() 只做转发
+    --target oem   -> Image.lzma + dtb.img + rootfs (原厂 U-Boot 2020.01 + upk/upd/upr)
+
+    python tools/make_bundle.py --target oem --tree sources/openwrt --port ponwrt \
         --out artifacts/bundle --version 0.8.5-pt1570 --variant four_gbe
 
-产物(文件名由原厂 U-Boot 环境宏 upk/upd/upr 决定, 不能改):
+oem 产物(文件名由原厂 U-Boot 环境宏 upk/upd/upr 决定, 不能改):
     Image.lzma   LZMA-alone 压缩的 arm64 Image, 补零到 6 MiB (upk 宏)
     dtb.img      FDT, 补零到 0x40000 (upd 宏按固定长度写入)
     rootfs       SquashFS (upr 宏)
@@ -190,14 +195,30 @@ def main() -> int:
     parser.add_argument("--tree", type=Path, required=True, help="OpenWrt 源码树 (sources/openwrt)")
     parser.add_argument("--port", type=Path, required=True, help="PonWRT-TYFZA1 克隆目录")
     parser.add_argument("--out", type=Path, required=True, help="输出目录")
-    parser.add_argument("--contract", type=Path, default=Path("uboot/contract.json"))
+    parser.add_argument("--contract", type=Path, default=None,
+                        help="fit 默认 uboot/contract-uboot2026.json; oem 默认 uboot/contract.json")
     parser.add_argument("--version", required=True)
     parser.add_argument("--variant", choices=("four_gbe", "2p5g"), default="four_gbe")
     parser.add_argument("--ponwrt-ref", default="")
     parser.add_argument("--skip-seed", action="store_true", help="不生成 overlay 种子")
+    parser.add_argument("--target", choices=("fit", "oem"), default="fit",
+                        help="fit=U-Boot 2026.07(FIT, 默认); oem=原厂 U-Boot 2020.01")
     args = parser.parse_args()
 
-    contract = json.loads(args.contract.read_text(encoding="utf-8"))
+    if args.target == "fit":
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import pack_fit
+        forwarded = ["--tree", str(args.tree), "--port", str(args.port),
+                     "--out", str(args.out), "--version", args.version,
+                     "--variant", args.variant]
+        if args.ponwrt_ref:
+            forwarded += ["--ponwrt-ref", args.ponwrt_ref]
+        if args.contract is not None:
+            forwarded += ["--contract", str(args.contract)]
+        return pack_fit.main(forwarded)
+
+    contract_path = args.contract or Path("uboot/contract.json")
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
     names = contract["artifacts"]
     limits = contract["limits"]
     tree = args.tree.resolve()
@@ -320,7 +341,7 @@ def main() -> int:
         "sources": {
             "ponwrt": args.ponwrt_ref or "unknown",
             "openwrt": openwrt_commit or "unknown",
-            "contract_sha256": sha256(args.contract),
+            "contract_sha256": sha256(contract_path),
         },
         "limits": limits,
         "ubi_volumes": [

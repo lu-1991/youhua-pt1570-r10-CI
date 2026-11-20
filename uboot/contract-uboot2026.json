@@ -1,0 +1,111 @@
+{
+  "schema": 2,
+  "target": "uboot-2026.07-fit",
+  "device": {
+    "model": "PT1570-R10",
+    "vendor": "Youhua (联通定制)",
+    "soc": "Realtek RTL9617C (Taurus), 4x Cortex-A55",
+    "pon": "10G-EPON",
+    "lan": "4x GbE (no 2.5G port)"
+  },
+  "evidence": {
+    "note": "本契约描述的是 pt1570-r10.boot.bin 里的 U-Boot 2026.07，不是原厂 2020.01。原厂契约仍保留在 uboot/contract.json。",
+    "bootloader_image": {
+      "path": "pt1570-r10.boot.bin",
+      "bytes": 2097152,
+      "sha256_observed": "02fc5dfddf00274f3e64c033b95ff0d963e681604fffb3e663d0c2d411f80ad1",
+      "layout": "MBR+GPT(fip0@0x40000, fip1@0x100000) + 两份相同 FIP，各 742400 B",
+      "bl33": {
+        "format": "RTL9-BL33-LZMA-STUB + LZMA-alone",
+        "stub_strings": ["RTL9-BL33-LZMA-STUB:", "PT1570-R10"],
+        "decompressed_bytes": 543864,
+        "version_string": "U-Boot 2026.07-gbb07c993b94f (Nov 16 2026 - 03:48:11 +0000) PT1570-R10"
+      }
+    },
+    "uboot_env_defaults": {
+      "bootcmd": "bootmenu",
+      "bootmenu_0": "Start OpenWrt=rtk_boot",
+      "bootmenu_1": "Start Web Recovery=rtk_recovery",
+      "ipaddr": "192.168.0.1",
+      "serverip": "192.168.0.2",
+      "loadaddr": "0x10000000"
+    },
+    "uboot_strings": {
+      "rtk_boot_help": "boot the system from the firmware volume",
+      "rtk_recovery_help": "start the web recovery service",
+      "fit_required": [
+        "not a FIT image: no device tree header at the start",
+        "UBI has no volume %s",
+        "No system is installed now; upload a firmware again."
+      ],
+      "absent_stock_macros": [
+        "upk", "upd", "upr", "b1", "process1", "setmoreargs",
+        "sw_commit", "sw_tryactive", "pfl_kernel1_sz"
+      ]
+    },
+    "kernel_side": {
+      "openwrt_commit": "79bc56cb7483bc716da07c369530b792631904b4",
+      "patches": [
+        "target/linux/generic/pending-6.18/510-block-add-uImage.FIT-subimage-block-driver.patch",
+        "target/linux/generic/pending-6.18/511-init-bypass-device-lookup-for-dev-fit-rootfs.patch"
+      ],
+      "kconfig": "CONFIG_UIMAGE_FIT_BLK=y",
+      "userspace_package": "fitblk (package/utils/fitblk，提供 /usr/sbin/fitblk 与 /lib/upgrade/fit.sh)",
+      "device_name_note": "块设备名是 /dev/fit0（FIT_DEVICE_PREFIX \"fit\"），不是 /dev/fitblk0"
+    }
+  },
+  "bootloader": {
+    "version": "2026.07",
+    "image_format": "uImage.FIT",
+    "fit_volume": "fit",
+    "ubi_part": "ubi_device",
+    "root_device": "/dev/fit0",
+    "rootfstype": "squashfs",
+    "bootargs_required": [
+      "root=/dev/fit0",
+      "rootwait",
+      "rootfstype=squashfs",
+      "pt1570.oem=1",
+      "tyfza1.slot=0"
+    ],
+    "dts": {
+      "chosen_extra": ["u-boot,version", "rootdisk"],
+      "volume_node": "/<flash>/volumes/volume-fit { volname = \"fit\"; }",
+      "volume_lookup": "drivers/mtd/ubi/vmt.c: device_get_named_child_node(vol->dev.parent->parent, \"volumes\")"
+    }
+  },
+  "fit": {
+    "default_config": "config-1",
+    "align_bytes": 4096,
+    "kernel_compression": "lzma",
+    "images": {
+      "kernel": {"node": "kernel-1", "type": "kernel", "arch": "arm64", "os": "linux"},
+      "fdt": {"node": "fdt-1", "type": "flat_dt", "arch": "arm64"},
+      "rootfs": {"node": "rootfs-1", "type": "filesystem", "loadable": true}
+    }
+  },
+  "limits": {
+    "fit_bytes": 67108864,
+    "kernel_raw_bytes": 50331648,
+    "kernel_bytes": 16777216,
+    "rootfs_bytes": 50331648
+  },
+  "lzma": {"lc": 3, "lp": 0, "pb": 2, "dictionary_bytes": 8388608},
+  "network": {
+    "host_ipaddr": "192.168.0.2",
+    "uboot_ipaddr": "192.168.0.1",
+    "uboot_serverip": "192.168.0.2",
+    "recovery_url": "http://192.168.0.1",
+    "admin_url": "http://192.168.1.1"
+  },
+  "ubi": {
+    "mtd_index": 4,
+    "part_name": "ubi_device",
+    "peb_bytes": 131072,
+    "leb_bytes": 126976,
+    "note": "卷名/卷 ID 由 U-Boot 2026.07 自己创建，打包层不假设固定 ID —— 这正是改用 FIT + /dev/fit0 的原因"
+  },
+  "artifacts": {
+    "fit": "sysupgrade.itb"
+  }
+}

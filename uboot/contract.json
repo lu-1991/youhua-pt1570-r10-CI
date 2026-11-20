@@ -9,7 +9,7 @@
     "reference_target": "rtl9617c / tianyi,tyfza1"
   },
   "evidence": {
-    "note": "所有数值均来自本机 U-Boot 环境分区与分区镜像，未使用任何默认值推测。",
+    "note": "所有数值均来自本机 U-Boot 环境分区与分区镜像，未使用任何默认值推测。本契约只描述原厂 U-Boot 2020.01；U-Boot 2026.07 的 FIT 契约见 contract-uboot2026.json。注意：工作区里的 pt1570-r10.boot.bin 已换成 2026.07 的镜像（sha256 02fc5dfd…），与 uboot_image.sha256（ad5c059c…）不是同一个文件。",
     "uboot_image": {
       "path": "pt1570-r10.boot.bin",
       "bytes": 2097152,

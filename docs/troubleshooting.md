@@ -143,3 +143,50 @@ LuCI → 状态 → 内核日志；或 SSH `dmesg | grep -iE 'ubi|squashfs|mtk|r
 * `Unsupported TYFZA1 board` → 板名不是 `tianyi,tyfza1`，说明刷的是别的机型固件。
 
 升级写卷失败不影响当前系统（先写 rootfs 再写内核，且失败会保留旧内核），重启后仍是旧版本。
+
+## fit 目标（U-Boot 2026.07 / uImage.FIT）
+
+### 刷完停在 bootmenu，选 Start OpenWrt 又回菜单
+
+`fit` 卷里没有可启动的 FIT，或写入被截断。串口会先打印
+`UBI has no volume fit` / `No system is installed now; upload a firmware again.` /
+`not a FIT image: no device tree header at the start`。重新用 Web Recovery 上传，
+或 `ubi check fit` 看一眼卷长度是否等于包大小。
+
+### `VFS: Cannot open root device "fit0"`
+
+内核没注册 `/dev/fit0`，三种原因按概率排：
+
+1. **FIT 里的 rootfs 子镜像没 4 KiB 对齐** —— `fitblk` 会静默跳过。用
+   `python tools/verify_fit.py <包目录>` 复查（这条是硬检查）。
+2. **DTB 缺 `u-boot,version` 或 `rootdisk`** —— `fitblk_init()` 直接 return 0，不报错。
+3. **`CONFIG_UIMAGE_FIT_BLK` 没打开** —— 这次编译的 `.config` 没带上，查
+   `zcat /proc/config.gz | grep UIMAGE_FIT_BLK`。
+
+### 首启停在 failsafe，`ubi info` 里没有 `rootfs_data`
+
+上游的 `tyfza1-migrate-storage`（preinit）是按原厂卷布局写的，fit 布局下没有
+`ubi_k0/ubi_r0/ubi_apps` 这些卷。串口里确认后手动补一个 overlay 卷：
+
+```sh
+ubi info                                    # 看现有卷
+ubimkvol /dev/ubi0 -N rootfs_data -m        # 用剩余空间建卷
+reboot
+```
+
+若脚本误判后直接退出（日志里有 `Unexpected TYFZA1`），临时把
+`/etc/preinit.d/*migrate*` 改名再重启，能进系统后再决定去留。
+
+### 启动进了系统，但升级提示板名/格式不对
+
+fit 目标的系统内 `sysupgrade` 还没接上（上游 `platform.sh` 仍写 `ubi_k<slot>`）。
+升级请用 U-Boot Web Recovery 重刷 `sysupgrade.itb`，见
+[uboot2026.md](uboot2026.md) 第 3.1 节。
+
+### 想知道"到底是不是按 FIT 启动的"
+
+```sh
+cat /proc/cmdline | tr ' ' '\n' | grep -E 'root=|rootwait'
+dmesg | grep -E 'fit0|fitblk'      # 期望: mapped 1 uImage.FIT ... as /dev/fit0
+cat /sys/firmware/devicetree/base/chosen/u-boot,version
+```

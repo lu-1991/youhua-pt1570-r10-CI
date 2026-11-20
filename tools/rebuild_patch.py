@@ -2,7 +2,8 @@
 """Rebuild the PT1570-R10 adaptation on top of a clean PonWRT-TYFZA1 checkout.
 
 Run from the repository root of the upstream clone; nothing is committed.
-The result is `git diff` -> patches/0001-oem-uboot-image-layout.patch.
+The result is `git diff` -> patches/oem/0001-oem-uboot-image-layout.patch.
+（只用于 oem 目标；fit 目标不改上游源码，见 patches/fit/README.md）
 """
 import pathlib
 import sys

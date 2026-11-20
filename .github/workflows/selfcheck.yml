@@ -22,7 +22,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: 合成镜像跑通打包与校验
-        run: python3 tools/selftest.py
+        run: |
+          python3 tools/selftest.py        # oem: 裸 LZMA 三件套
+          python3 tools/selftest_fit.py    # fit: uImage.FIT + 5 个反例
       - name: 契约字段自洽
         run: |
           python3 - <<'PY'
@@ -44,7 +46,24 @@ jobs:
           assert sorted(v['id'] for v in c['ubi']['volumes']) == list(range(len(c['ubi']['volumes'])))
           assert sum(v['eraseblocks'] for v in c['ubi']['volumes']) == c['ubi']['reserved_leb_total']
           assert c['ubi']['peb_count'] == c['partitions'][4]['bytes'] // c['ubi']['peb_bytes']
-          print('契约自洽检查通过')
+          print('原厂契约自洽检查通过')
+          PY
+      - name: FIT 契约字段自洽
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          c = json.loads(pathlib.Path('uboot/contract-uboot2026.json').read_text(encoding='utf-8'))
+          assert c['bootloader']['fit_volume'] == 'fit'
+          assert c['bootloader']['root_device'] == '/dev/fit0'
+          assert 'root=%s' % c['bootloader']['root_device'] in c['bootloader']['bootargs_required']
+          assert 'rootwait' in c['bootloader']['bootargs_required']
+          assert c['fit']['align_bytes'] == 4096
+          assert c['fit']['images']['rootfs']['type'] == 'filesystem'
+          assert c['fit']['images']['rootfs']['loadable'] is True
+          assert c['limits']['fit_bytes'] >= c['limits']['kernel_bytes'] + c['limits']['rootfs_bytes']
+          # 卷 ID 不再被假设: FIT 路径靠 volname 定位
+          assert 'volumes' in c['bootloader']['dts']['volume_lookup']
+          print('FIT 契约自洽检查通过')
           PY
       - name: 刷机命令与契约一致
         run: |
@@ -65,7 +84,8 @@ jobs:
           git -C upstream remote add origin "$PONWRT_REPO"
           git -C upstream fetch --depth 1 origin "$PONWRT_REF"
           git -C upstream checkout -q FETCH_HEAD
-          for patch in patches/*.patch; do
+          shopt -s nullglob
+          for patch in patches/oem/*.patch; do
             echo "== $patch"
             git -C upstream apply --check --verbose "$GITHUB_WORKSPACE/$patch"
             git -C upstream apply "$GITHUB_WORKSPACE/$patch"

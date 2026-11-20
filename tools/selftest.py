@@ -85,6 +85,8 @@ def main() -> int:
         def build(out: Path) -> None:
             run([
                 sys.executable, str(REPO / "tools/make_bundle.py"),
+                "--target", "oem",                                  # 本文件只覆盖原厂 U-Boot 路径
+                "--contract", str(REPO / "uboot/contract.json"),
                 "--tree", str(tree), "--port", str(work), "--out", str(out),
                 "--version", "selftest", "--skip-seed",
             ])
