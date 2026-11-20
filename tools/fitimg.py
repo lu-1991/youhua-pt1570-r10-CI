@@ -272,13 +272,17 @@ class Fit:
         def pad(data: bytes) -> bytes:
             return data + b"\x00" * (_align(len(data), Fit.ALIGN) - len(data))
 
+        # U-Boot 的 fit_image_get_data() 只读 data-position/data-size(绝对偏移+精确长度),
+        # 绝不认识自定义的 data 属性 —— 后者会被当成"内嵌数据", 长度只有 8 字节, 必然起不来。
+        # kernel/fdt 用精确长度(LZMA/DTB 自己有结束标记); 只有 rootfs 补到 4 KiB,
+        # 因为内核 fitblk 驱动按 4 KiB 块映射子镜像。
+        # 各段起始位置统一 4 KiB 对齐(与 mkimage -E 及上游验证过的 itb 一致)。
         images: list[tuple[str, str, bytes, str, str]] = [
             # (节点名, type, 实际落盘数据, compression, description)
-            ("kernel-1", "kernel", pad(kernel), kernel_compression, "OpenWrt kernel"),
-            ("fdt-1", "flat_dt", pad(fdt), "none", "PT1570-R10 device tree"),
+            ("kernel-1", "kernel", kernel, kernel_compression, "OpenWrt kernel"),
+            ("fdt-1", "flat_dt", fdt, "none", "PT1570-R10 device tree"),
         ]
         if rootfs is not None:
-            # rootfs 的 data-size 必须 4 KiB 对齐, 尾部补零不影响 squashfs 挂载
             images.append(("rootfs-1", "filesystem", pad(rootfs), "none", "OpenWrt squashfs rootfs"))
 
         def make_tree(offsets: dict[str, tuple[int, int]]) -> Dtb:
@@ -294,7 +298,10 @@ class Fit:
                 node = imgs.add_child(name)
                 node.set_str("description", desc)
                 pos, size = offsets[name]
-                node.set_bytes("data", struct.pack(">II", pos, size))
+                # U-Boot 标准属性: data-position 是从 FIT 起始算的绝对字节偏移,
+                # data-size 是精确长度; 不能写成 data=<pos,size> 的内嵌数据。
+                node.set_u32("data-position", pos)
+                node.set_u32("data-size", size)
                 node.set_str("type", kind)
                 node.set_str("compression", comp)
                 if kind == "kernel":
@@ -352,10 +359,14 @@ class Fit:
 
         images: dict[str, dict] = {}
         for node in images_node.children:
-            data = node.get("data")
-            if data is None or len(data) != 8:
-                raise FdtError("子镜像 %s 缺少 data 属性" % node.name)
-            pos, size = struct.unpack(">II", data)
+            # 只认 U-Boot 的 data-position/data-size。旧版打包器写的是 8 字节
+            # data 属性, U-Boot 会当成内嵌数据直接加载 —— 这里必须拒绝, 不能兼容。
+            if node.get("data") is not None:
+                raise FdtError("子镜像 %s 用了非标准 data 属性(应为 data-position/data-size)" % node.name)
+            pos_raw, size_raw = node.get("data-position"), node.get("data-size")
+            if pos_raw is None or len(pos_raw) != 4 or size_raw is None or len(size_raw) != 4:
+                raise FdtError("子镜像 %s 缺少 data-position/data-size" % node.name)
+            pos, size = struct.unpack(">II", pos_raw + size_raw)
             images[node.name] = {
                 "type": node.get_str("type", ""),
                 "compression": node.get_str("compression", "none"),

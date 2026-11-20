@@ -61,19 +61,6 @@ def run_verify(bundle: Path) -> tuple[int, str]:
     return code, buf.getvalue()
 
 
-def rebuild(bundle: Path, mutate) -> None:
-    """改 FIT 头里的描述(不动数据区), 用来构造反例。"""
-    path = bundle / "sysupgrade.itb"
-    blob = path.read_bytes()
-    header_len = struct.unpack_from(">I", blob, 4)[0]
-    dtb = fitimg.Dtb.parse(blob[:header_len])
-    mutate(dtb)
-    new_header = dtb.serialize()
-    if len(new_header) != header_len:
-        raise SystemExit("反例构造失败: FDT 长度变了 %d -> %d" % (header_len, len(new_header)))
-    path.write_bytes(new_header + blob[header_len:])
-
-
 def build_bundle(out: Path, tree: Path, dtb_mutate=None) -> None:
     """跑一遍 pack_fit; dtb_mutate 用来在打包时篡改设备树(构造反例)。"""
     original = pack_fit.patch_dtb
@@ -92,15 +79,19 @@ def build_bundle(out: Path, tree: Path, dtb_mutate=None) -> None:
         pack_fit.patch_dtb = original
 
 
-def rebuild(bundle: Path, mutate) -> None:
-    """改 FIT 头里的描述(不动数据区), 用来构造反例。"""
+def rebuild(bundle: Path, mutate, *, allow_resize: bool = False) -> None:
+    """改 FIT 头里的描述(不动数据区), 用来构造反例。
+
+    默认要求 FDT 等长, 保证数据区偏移不变; legacy-data 反例要增删属性,
+    长度必然变化, 用 allow_resize 放开(该反例在解析阶段就会被拒绝)。
+    """
     path = bundle / "sysupgrade.itb"
     blob = path.read_bytes()
     header_len = struct.unpack_from(">I", blob, 4)[0]
     dtb = fitimg.Dtb.parse(blob[:header_len])
     mutate(dtb)
     new_header = dtb.serialize()
-    if len(new_header) != header_len:
+    if len(new_header) != header_len and not allow_resize:
         raise SystemExit("反例构造失败: FDT 长度变了 %d -> %d" % (header_len, len(new_header)))
     path.write_bytes(new_header + blob[header_len:])
 
@@ -136,15 +127,28 @@ def main() -> int:
                  "loadables", b"nosuch-1\x00"),
              "rootfs 在 loadables"),
             ("align",
-             lambda d: d.find("/images/rootfs-1").set_bytes(
-                 "data", struct.pack(">II", struct.unpack(">II", d.find("/images/rootfs-1").get("data"))[0] + 64,
-                                     struct.unpack(">II", d.find("/images/rootfs-1").get("data"))[1])),
+             lambda d: d.find("/images/rootfs-1").set_u32(
+                 "data-position",
+                 struct.unpack(">I", d.find("/images/rootfs-1").get("data-position"))[0] + 64),
              "rootfs 位置 4K 对齐"),
         ):
             probe = base / ("case-" + name)
             shutil.copytree(bundle, probe)
             rebuild(probe, mutate)
             expect(name, probe, needle)
+
+        # 回归锁: 旧版打包器的致命错误 —— 用 8 字节 data 属性存偏移, U-Boot
+        # 会当成内嵌数据(长度 8), 必然起不来。校验器必须拒绝这种头。
+        def legacy_data(dtb):
+            node = dtb.find("/images/rootfs-1")
+            node.set_bytes("data", node.get("data-position") + node.get("data-size"))
+            node.del_prop("data-position")
+            node.del_prop("data-size")
+
+        probe = base / "case-legacy-data"
+        shutil.copytree(bundle, probe)
+        rebuild(probe, legacy_data, allow_resize=True)
+        expect("legacy-data", probe, "非标准 data 属性")
 
         # --- 设备树错(在打包阶段篡改, 长度可变) ---
         for name, mutate, needle in (

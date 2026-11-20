@@ -72,8 +72,18 @@ FIT 排布（`fitimg.Fit.build`）：
 [ FIT 头(FDT) ][pad→4K][ kernel ][pad→4K][ fdt ][pad→4K][ rootfs ]
 ```
 
-每个子镜像的 `data-position` 和 `data-size` 都是 4 KiB 整数倍。`rootfs` 的
-`data-size` 对齐不是形式主义：`fitblk` 会**直接跳过**未对齐的 filesystem 子镜像。
+每个子镜像用 U-Boot 标准的 `data-position`（**从 FIT 起始算的绝对字节偏移**）+
+`data-size`（**精确数据长度**）定位，起始位置都是 4 KiB 对齐。kernel/fdt 的
+`data-size` 取精确长度（LZMA/DTB 自带结束标记，尾部补零没有意义）；只有 `rootfs`
+的 `data-size` 补到 4 KiB——`fitblk` 会**直接跳过**未对齐的 filesystem 子镜像。
+
+> **踩过的坑**：早期版本把偏移写进了自定义属性 `data`（8 字节 `<pos,size>`）。
+> U-Boot 的 `fit_image_get_data()` 只认 `data-position` / `data-offset`，找不到就
+> 回落到内嵌 `data` 属性——于是它把那 8 字节当成整个内核加载，必然起不来。
+> 更糟的是打包器和校验器当时共用这套自定义解析，自测全绿却一直骗着自己。
+> 现在 `Fit.parse()` 会**主动拒绝**带 `data` 属性的头，`selftest_fit.py` 有专门的
+> `legacy-data` 反例锁住这个回归。上游那个真机验证过的 `.itb` 用的也是
+> `data-position` / `data-size`，可以对照。
 
 ---
 
@@ -142,9 +152,11 @@ dmesg | grep -E 'fit0|fitblk'
 
 ## 5. 已验证 / 未验证
 
-**已验证（离线，可复现）**：FIT 结构、子镜像 4 KiB 对齐、hash、DTB 三件套、
-LZMA 解开是 arm64 `Image`、体积上限。`python tools/selftest_fit.py` 全绿，
-并会用 6 个反例证明这些检查真的能拦住问题。
+**已验证（离线，可复现）**：FIT 结构、标准 `data-position`/`data-size` 定位、
+子镜像 4 KiB 对齐、hash、DTB 三件套、LZMA 解开是 arm64 `Image`、体积上限，
+并按 U-Boot `fit_image_get_data()` 的规则（只走 `data-position`，拒绝内嵌 `data`）
+复验过实际生成的 `.itb`。`python tools/selftest_fit.py` 全绿，
+并会用 7 个反例证明这些检查真的能拦住问题。
 
 **未验证（需要真机）**：
 

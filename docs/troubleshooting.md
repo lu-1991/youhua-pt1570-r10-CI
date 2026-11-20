@@ -146,6 +146,18 @@ LuCI → 状态 → 内核日志；或 SSH `dmesg | grep -iE 'ubi|squashfs|mtk|r
 
 ## fit 目标（U-Boot 2026.07 / uImage.FIT）
 
+### 串口报 `Wrong Image Format` / `Could not find subimage` / 内核完全不启动
+
+先查 FIT 头里子镜像的定位属性：
+
+```sh
+python tools/verify_fit.py <包目录>
+```
+
+必须是 `data-position` + `data-size`，**不能有** `data` 属性。旧版打包器把偏移
+写进了 `data`（8 字节），U-Boot 会当成内嵌数据加载 8 字节的内核 —— 校验器
+现在会明确报「非标准 data 属性」。重新用当前 `pack_fit.py` 打包即可。
+
 ### 刷完停在 bootmenu，选 Start OpenWrt 又回菜单
 
 `fit` 卷里没有可启动的 FIT，或写入被截断。串口会先打印
