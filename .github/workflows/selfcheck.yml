@@ -65,6 +65,20 @@ jobs:
           assert 'volumes' in c['bootloader']['dts']['volume_lookup']
           print('FIT 契约自洽检查通过')
           PY
+      - name: 编译配置自洽
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          t = pathlib.Path('config/pt1570-r10.config').read_text(encoding='utf-8')
+          on = {ln.strip() for ln in t.splitlines() if ln.strip() and not ln.startswith('#')}
+          # ccache 在 OpenWrt 里是 `bool ... if DEVEL`, DEVEL 关掉时 CCACHE 会被
+          # make defconfig 丢弃 —— 两个必须成对出现, 否则缓存层白配。
+          assert 'CONFIG_DEVEL=y' in on, 'CCACHE 需要 DEVEL=y, 否则 defconfig 会丢掉'
+          assert 'CONFIG_CCACHE=y' in on, '缓存层依赖 CCACHE=y'
+          assert 'CONFIG_UIMAGE_FIT_BLK=y' in on, 'fit 目标需要 fitblk 内核驱动'
+          assert 'CONFIG_PACKAGE_fitblk=y' in on, 'fit 目标需要 fitblk 用户态工具'
+          print('编译配置自洽检查通过: ccache + fitblk 符号齐全')
+          PY
       - name: 刷机命令与契约一致
         run: |
           python3 tools/make_bundle.py --help >/dev/null

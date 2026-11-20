@@ -7,17 +7,19 @@
 | --- | --- | --- | --- |
 | 1 | checkout | 取本仓库 | |
 | 2 | 读取编译参数 | 从 `config/build.env` 读上游提交/运行时版本/默认机型 | 也可用 `workflow_dispatch` 覆盖 |
-| 3 | 释放磁盘 + 装依赖 | 删 dotnet/android/ghc，装 clang-18、rust 依赖等 | 完整构建需要 ~40 GB |
+| 3 | 释放磁盘 + 装依赖 | 删 dotnet/android/ghc 等，加 8G swap 防 OOM，装 clang-18、rust 依赖 | 完整构建需要 ~40 GB |
 | 4 | 拉上游 PonWRT | `git fetch --depth 1 origin <PIN>` | 不落盘到仓库 |
 | 5 | 打适配补丁 | `git apply patches/$BOOT_TARGET/*.patch` + `sh -n` 语法检查 | oem 有 1 个补丁；fit 目录下没有补丁（见 `patches/fit/README.md`） |
 | 6 | 取锁定 OpenWrt | 上游 `port/scripts/prepare.sh`（固定提交 `79bc56cb`） | 上游自己维护的锁 |
-| 7 | 准备 OMCI 编译器 | rust 1.96.1 + `aarch64-unknown-linux-musl` | 上游要求 |
-| 8 | 缓存 `dl/` | `actions/cache` 键 = `sources.lock.json` + `feeds.conf` 哈希 | 二次构建省 10+ 分钟 |
-| 9 | 运行时文件与签名密钥 | 从上游 Release 拉 `tyfza1-runtime-inputs-v1.tar.gz`；FIT 开发密钥用公开测试密钥并校验 SHA-256 | 可用 secret `TYFZA1_FIT_SIGNING_KEY` 覆盖 |
-| 10 | 组装 `.config` | 上游 `tyfza1-boot.config` + 本仓库 `config/pt1570-r10.config` | 只覆盖机型相关项 |
-| 11 | 编译 | `port/scripts/build.sh sources/openwrt $(nproc)`，日志存 artifact | 4 核约 2.5–5 小时，超时 420 分钟 |
-| 12 | 打包 + 契约校验 | `make_bundle.py --target $BOOT_TARGET` → `verify_fit.py`(fit) 或 `verify_bundle.py --strict-raw`(oem) | 校验失败即红，不出包 |
-| 13 | 上传 / 发布 | artifact 保留 30 天；填了 `release_tag` 就打 zip 发 Release | |
+| 7 | 固化缓存 key | PonWRT 提交前 12 位 + 本仓库 config/补丁指纹 + `sources.lock.json` 哈希（步骤 8 起） | 源码或配置一变就换 key，绝不拿旧缓存编新代码 |
+| 8 | 准备 OMCI 编译器 | rust 1.96.1 + `aarch64-unknown-linux-musl` | 上游要求 |
+| 9 | 恢复四层缓存 | `dl/`（源码包）、`staging_dir/host` + `staging_dir/toolchain-*` + `build_dir/toolchain-*`（工具链）、`.ccache`、`feeds/` + `package/feeds/` | 全部 `continue-on-error`，不命中就退回全量编译 |
+| 10 | 运行时文件与签名密钥 | 从上游 Release 拉 `tyfza1-runtime-inputs-v1.tar.gz`；FIT 开发密钥用公开测试密钥并校验 SHA-256 | 可用 secret `TYFZA1_FIT_SIGNING_KEY` 覆盖 |
+| 11 | 组装 `.config` | 上游 `tyfza1-boot.config` + 本仓库 `config/pt1570-r10.config`（含 `CONFIG_DEVEL=y` + `CONFIG_CCACHE=y`） | 只覆盖机型相关项 + ccache 加速；ccache 不进产物 |
+| 12 | 编译 | `port/scripts/build.sh sources/openwrt $(nproc)`，日志存 artifact | 4 核约 2.5–5 小时，超时 420 分钟；首轮冷编译后工具链/ccache 命中可大幅缩短 |
+| 13 | 保存四层缓存 | 仅在该层未命中且编译成功时 save（GitHub cache 同 key 不可覆盖） | 命中过的层不重复上传 |
+| 14 | 打包 + 契约校验 | `make_bundle.py --target $BOOT_TARGET` → `verify_fit.py`(fit) 或 `verify_bundle.py --strict-raw`(oem) | 校验失败即红，不出包 |
+| 15 | 上传 / 发布 | artifact 保留 30 天；填了 `release_tag` 就打 zip 发 Release | |
 
 ## 为什么必须整包编译
 

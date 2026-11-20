@@ -82,15 +82,40 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "本次编译: 上游 $PONWRT_REF, 机型 $DEFAULT_VARIANT, 版本 $VERSION_INPUT, 目标 ${{ inputs.boot_target || 'fit' }}"
 
+      # 缓存 key 绑定"源码提交 + 配置指纹": 任一变化都换 key, 绝不拿旧工具链/ccache 编新代码。
+      # 源码两处: PonWRT 基线(PONWRT_REF) + 它锁定的 OpenWrt pin(sources.lock.json)。
+      # 配置指纹: 我们自己的 config 片段 + 补丁, 一改就失效。
+      - name: 解析缓存 key
+        id: cachekey
+        run: |
+          set -eu
+          src=$(printf '%s' "$PONWRT_REF" | cut -c1-12)
+          cfg=$( { cat config/build.env config/pt1570-r10.config; \
+                   find patches -type f -name '*.patch' -exec sha256sum {} +; } \
+                 | sha256sum | cut -c1-12 )
+          # 先拉取 ponwrt 才能读到 sources.lock.json, 所以 openwrt pin 在下一步补进 key;
+          # 这里先给出 src+cfg 前缀, 缓存步骤在那之后。
+          echo "src=$src" >> "$GITHUB_OUTPUT"
+          echo "cfg=$cfg" >> "$GITHUB_OUTPUT"
+          echo "cache 前缀: src=$src cfg=$cfg"
+
       - name: 释放磁盘空间并安装依赖
         run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+                      /usr/local/share/chromium /usr/share/swift /opt/alibaba /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force 2>/dev/null || true
+          sudo apt-get clean
+          # 4 核 runner 上并行 make 偶尔 OOM; 8G swap 兜底(不是加速, 是防编译被杀)。
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 8G /swapfile && sudo chmod 600 /swapfile
+          sudo mkswap /swapfile && sudo swapon /swapfile
           sudo apt-get update
           sudo apt-get install -y build-essential busybox clang-18 llvm-18 lld-18 flex bison gawk \
             gettext git libncurses-dev libssl-dev python3 python3-setuptools rsync unzip \
             zlib1g-dev file wget curl device-tree-compiler u-boot-tools swig \
             libelf-dev python3-pyelftools python3-dev libfuse-dev pkgconf
-          df -h /
+          df -hT /; free -h
 
       - name: 拉取上游 PonWRT-TYFZA1
         run: |
@@ -127,17 +152,69 @@ jobs:
         working-directory: ponwrt
         run: sh port/scripts/prepare.sh sources/openwrt
 
+      # 把 OpenWrt pin 固化成变量: restore/save 必须用一个 key。
+      # 不能到 save 时再 hashFiles —— build.sh 的 sync-overlay.sh 会改源码树,
+      # 那时 lock 文件的哈希可能已经变了, 会存到一个永远命不中的 key 上。
+      - name: 固化缓存 pin
+        id: owpin
+        run: |
+          set -eu
+          pin=$(sha256sum "$PONWRT_DIR/port/sources.lock.json" | cut -c1-16)
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+          echo "OpenWrt 锁定 pin: $pin"
+
       - name: 准备 OMCI 交叉编译器
         run: |
           rustup toolchain install 1.96.1 --profile minimal
           rustup target add --toolchain 1.96.1 aarch64-unknown-linux-musl
           echo "TYFZA1_CARGO=$(rustup which --toolchain 1.96.1 cargo)" >> "$GITHUB_ENV"
 
-      - name: 缓存 OpenWrt 下载目录
-        uses: actions/cache@v4
+      # ---- 四层缓存(restore) ----
+      # key = PonWRT 提交 + 我们的配置指纹 + 锁定的 OpenWrt pin; 任一变化自动失效。
+      # 全部 continue-on-error: 命中不了退回全量编译, 不会让构建失败。
+      # 注意: 原来的 key 引用了上游并不存在的 configs/feeds.conf, 导致 key 恒定;
+      # 现在改用 sources.lock.json(compile 前已 clone), 源码变了 key 一定变。
+      - name: Restore dl cache (源码包)
+        id: dl_restore
+        uses: actions/cache/restore@v4
+        continue-on-error: true
         with:
           path: ponwrt/sources/openwrt/dl
-          key: openwrt-dl-${{ hashFiles('ponwrt/port/sources.lock.json') }}-${{ hashFiles('ponwrt/configs/feeds.conf') }}
+          key: pt1570-dl-${{ steps.cachekey.outputs.src }}-${{ steps.cachekey.outputs.cfg }}-${{ steps.owpin.outputs.pin }}
+          restore-keys: pt1570-dl-${{ steps.cachekey.outputs.src }}-${{ steps.cachekey.outputs.cfg }}-
+
+      - name: Restore toolchain & host tools cache
+        id: tc_restore
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: |
+            ponwrt/sources/openwrt/staging_dir/host
+            ponwrt/sources/openwrt/staging_dir/toolchain-*
+            ponwrt/sources/openwrt/build_dir/toolchain-*
+          key: pt1570-tc-${{ steps.cachekey.outputs.src }}-${{ steps.cachekey.outputs.cfg }}-${{ steps.owpin.outputs.pin }}
+          restore-keys: pt1570-tc-${{ steps.cachekey.outputs.src }}-${{ steps.cachekey.outputs.cfg }}-
+
+      - name: Restore ccache
+        id: ccache_restore
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: ponwrt/sources/openwrt/.ccache
+          key: pt1570-ccache-${{ steps.cachekey.outputs.src }}-${{ steps.cachekey.outputs.cfg }}-${{ steps.owpin.outputs.pin }}
+          restore-keys: pt1570-ccache-${{ steps.cachekey.outputs.src }}-${{ steps.cachekey.outputs.cfg }}-
+
+      # feeds 由 build.sh 内部的 prepare_luci_feeds.sh 生成; 缓存整目录让下次增量更新。
+      - name: Restore feeds cache
+        id: feeds_restore
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: |
+            ponwrt/sources/openwrt/feeds
+            ponwrt/sources/openwrt/package/feeds
+          key: pt1570-feeds-${{ steps.cachekey.outputs.src }}-${{ steps.owpin.outputs.pin }}
+          restore-keys: pt1570-feeds-${{ steps.cachekey.outputs.src }}-
 
       - name: 获取运行时文件与签名密钥
         run: |
@@ -177,6 +254,45 @@ jobs:
         run: |
           export PATH="/usr/lib/llvm-18/bin:$PATH"
           sh port/scripts/build.sh sources/openwrt "$(nproc)" 2>&1 | tee "$GITHUB_WORKSPACE/artifacts/build.log"
+
+      # ---- 四层缓存(save): 只在编译成功且该层未命中时上传, 避免覆盖已有缓存 ----
+      # cache 同一 key 不可覆盖, 命中过说明内容已经是最新的, 不必再压一遍。
+      - name: Save dl cache
+        if: success() && steps.dl_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: ponwrt/sources/openwrt/dl
+          key: pt1570-dl-${{ steps.cachekey.outputs.src }}-${{ steps.cachekey.outputs.cfg }}-${{ steps.owpin.outputs.pin }}
+
+      - name: Save toolchain & host tools cache
+        if: success() && steps.tc_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: |
+            ponwrt/sources/openwrt/staging_dir/host
+            ponwrt/sources/openwrt/staging_dir/toolchain-*
+            ponwrt/sources/openwrt/build_dir/toolchain-*
+          key: pt1570-tc-${{ steps.cachekey.outputs.src }}-${{ steps.cachekey.outputs.cfg }}-${{ steps.owpin.outputs.pin }}
+
+      - name: Save ccache
+        if: success() && steps.ccache_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: ponwrt/sources/openwrt/.ccache
+          key: pt1570-ccache-${{ steps.cachekey.outputs.src }}-${{ steps.cachekey.outputs.cfg }}-${{ steps.owpin.outputs.pin }}
+
+      - name: Save feeds cache
+        if: success() && steps.feeds_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: |
+            ponwrt/sources/openwrt/feeds
+            ponwrt/sources/openwrt/package/feeds
+          key: pt1570-feeds-${{ steps.cachekey.outputs.src }}-${{ steps.owpin.outputs.pin }}
 
       - name: 打包刷机包
         run: |
